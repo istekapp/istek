@@ -128,7 +128,10 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-
+      # Remove stale gen/schemas to force regeneration with correct plugin permissions
+      - name: Clean generated schemas
+        run: rm -rf src-tauri/gen/schemas
+        shell: bash
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0.6

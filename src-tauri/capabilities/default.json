@@ -8,9 +8,6 @@
   "permissions": [
     "core:default",
     "core:webview:allow-set-webview-zoom",
-    "shell:default",
-    "fs:default",
-    "dialog:default",
     "log:default"
   ]
 }

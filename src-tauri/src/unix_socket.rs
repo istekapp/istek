@@ -1,11 +1,5 @@
-use http_body_util::{BodyExt, Full};
-use hyper::body::Bytes;
-use hyper::Request;
-use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Instant;
-use tokio::net::UnixStream;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UnixSocketResponse {
@@ -18,6 +12,8 @@ pub struct UnixSocketResponse {
     pub size: usize,
 }
 
+// Unix socket is only supported on Unix-like systems (Linux, macOS)
+#[cfg(unix)]
 #[tauri::command]
 pub async fn send_unix_socket_request(
     socket_path: String,
@@ -26,6 +22,13 @@ pub async fn send_unix_socket_request(
     headers: HashMap<String, String>,
     body: Option<String>,
 ) -> Result<UnixSocketResponse, String> {
+    use http_body_util::{BodyExt, Full};
+    use hyper::body::Bytes;
+    use hyper::Request;
+    use hyper_util::rt::TokioIo;
+    use std::time::Instant;
+    use tokio::net::UnixStream;
+
     let start = Instant::now();
 
     // Connect to Unix socket
@@ -108,4 +111,17 @@ pub async fn send_unix_socket_request(
         time: elapsed,
         size,
     })
+}
+
+// Windows stub - Unix sockets are not supported
+#[cfg(not(unix))]
+#[tauri::command]
+pub async fn send_unix_socket_request(
+    _socket_path: String,
+    _method: String,
+    _path: String,
+    _headers: HashMap<String, String>,
+    _body: Option<String>,
+) -> Result<UnixSocketResponse, String> {
+    Err("Unix sockets are not supported on Windows".to_string())
 }

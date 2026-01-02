@@ -40,10 +40,13 @@ futures-util = "0.3"
 # MQTT
 rumqttc = "0.24"
 
-# Unix Socket (HTTP over Unix Socket) and Mock Server
+# HTTP over Unix Socket and Mock Server
 hyper = { version = "1.4", features = ["client", "server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "server", "http1", "http2", "tokio"] }
 http-body-util = "0.1"
+
+# Unix Socket - only on Unix-like systems (not Windows)
+[target.'cfg(unix)'.dependencies]
 hyperlocal = "0.9"
 
 # gRPC

@@ -56,11 +56,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS Intel (using macos-15 with Intel runner)
-          - platform: macos-15-large
-            target: x86_64-apple-darwin
-            arch: x64
-            os_name: macos
           # macOS Apple Silicon (ARM64)
           - platform: macos-15
             target: aarch64-apple-darwin

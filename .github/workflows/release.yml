@@ -128,6 +128,13 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # Clean Cargo cache to ensure fresh plugin resolution
+      - name: Clean Cargo cache
+        run: |
+          cd src-tauri
+          rm -f Cargo.lock
+          cargo clean
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0.6
         env:

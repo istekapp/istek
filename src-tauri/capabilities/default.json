@@ -8,22 +8,9 @@
   "permissions": [
     "core:default",
     "core:webview:allow-set-webview-zoom",
-    "shell:allow-spawn",
-    "shell:allow-execute",
-    "shell:allow-stdin-write",
-    "shell:allow-kill",
-    "shell:allow-open",
-    {
-      "identifier": "fs:default",
-      "allow": [
-        { "path": "$APPDATA/**" },
-        { "path": "$HOME/**" },
-        { "path": "$DOCUMENT/**" },
-        { "path": "$DOWNLOAD/**" }
-      ]
-    },
-    {
-      "identifier": "dialog:default"
-    }
+    "shell:default",
+    "fs:default",
+    "dialog:default",
+    "log:default"
   ]
 }

@@ -20,7 +20,7 @@ env:
 
 jobs:
   create-release:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     outputs:
       release_id: ${{ steps.create_release.outputs.id }}
       release_upload_url: ${{ steps.create_release.outputs.upload_url }}
@@ -57,22 +57,28 @@ jobs:
       matrix:
         include:
           # macOS Apple Silicon (ARM64)
-          - platform: macos-15
-            target: aarch64-apple-darwin
-            arch: arm64
+          - platform: macos-latest
+            args: '--target aarch64-apple-darwin'
+            targets: 'aarch64-apple-darwin'
             os_name: macos
-          # Windows
-          - platform: windows-2025
-            target: x86_64-pc-windows-msvc
-            arch: x64
+          # macOS Intel (x64)
+          - platform: macos-latest
+            args: '--target x86_64-apple-darwin'
+            targets: 'x86_64-apple-darwin'
+            os_name: macos
+          # Windows x64
+          - platform: windows-latest
+            args: ''
+            targets: ''
             os_name: windows
-          # Linux
-          - platform: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            arch: x64
+          # Linux x64
+          - platform: ubuntu-22.04
+            args: ''
+            targets: ''
             os_name: linux
 
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -86,13 +92,14 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.targets }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
-          shared-key: ${{ matrix.target }}-v3
+          workspaces: 'src-tauri'
+          shared-key: ci
+          cache-on-failure: true
 
       # Linux dependencies
       - name: Install Linux dependencies
@@ -101,26 +108,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
+            libappindicator3-dev \
             librsvg2-dev \
             patchelf \
             libssl-dev \
             libgtk-3-dev
 
-      # macOS: Install protobuf for gRPC
-      - name: Install protobuf (macOS)
-        if: matrix.os_name == 'macos'
-        run: brew install protobuf
-
-      # Linux: Install protobuf for gRPC
-      - name: Install protobuf (Linux)
-        if: matrix.os_name == 'linux'
-        run: sudo apt-get install -y protobuf-compiler
-
-      # Windows: Install protobuf for gRPC
-      - name: Install protobuf (Windows)
-        if: matrix.os_name == 'windows'
-        run: choco install protoc
+      # Install protobuf using arduino/setup-protoc (works on all platforms)
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install frontend dependencies
         run: npm ci
@@ -134,18 +132,18 @@ jobs:
         shell: bash
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0.6
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: --target ${{ matrix.target }}
+          args: ${{ matrix.args }}
 
   publish-release:
     needs: [create-release, build-tauri]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Publish Release
         uses: softprops/action-gh-release@v2

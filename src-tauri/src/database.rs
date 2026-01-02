@@ -84,6 +84,18 @@ pub struct TestRunHistory {
     pub summary: serde_json::Value, // Store TestRunSummary as JSON
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServer {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: std::collections::HashMap<String, String>,
+    pub enabled: bool,
+    pub created_at: i64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppData {
@@ -177,6 +189,17 @@ impl Database {
                 provider_type TEXT NOT NULL,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 config TEXT,
+                created_at INTEGER NOT NULL
+            );
+
+            -- MCP servers table (global - not workspace-scoped)
+            CREATE TABLE IF NOT EXISTS mcp_servers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                command TEXT NOT NULL,
+                args TEXT NOT NULL DEFAULT '[]',
+                env TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
                 created_at INTEGER NOT NULL
             );
 
@@ -1244,4 +1267,131 @@ pub async fn get_shareable_environments(app: tauri::AppHandle) -> Result<Vec<Env
         .collect();
 
     Ok(environments)
+}
+
+// ============ MCP Server Commands ============
+
+#[tauri::command]
+pub async fn get_mcp_servers(app: tauri::AppHandle) -> Result<Vec<McpServer>, String> {
+    let db = app.state::<Arc<Database>>();
+    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare("SELECT id, name, command, args, env, enabled, created_at FROM mcp_servers ORDER BY name")
+        .map_err(|e| e.to_string())?;
+    
+    let servers: Vec<McpServer> = stmt
+        .query_map([], |row| {
+            let args_str: String = row.get(3)?;
+            let env_str: String = row.get(4)?;
+            Ok(McpServer {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                command: row.get(2)?,
+                args: serde_json::from_str(&args_str).unwrap_or_default(),
+                env: serde_json::from_str(&env_str).unwrap_or_default(),
+                enabled: row.get::<_, i32>(5)? != 0,
+                created_at: row.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(servers)
+}
+
+#[tauri::command]
+pub async fn add_mcp_server(
+    app: tauri::AppHandle,
+    name: String,
+    command: String,
+    args: Vec<String>,
+    env: std::collections::HashMap<String, String>,
+) -> Result<McpServer, String> {
+    let db = app.state::<Arc<Database>>();
+    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+
+    let id = format!("mcp_{}", uuid::Uuid::new_v4().to_string().replace("-", "")[..16].to_string());
+    let created_at = chrono::Utc::now().timestamp_millis();
+    let args_json = serde_json::to_string(&args).unwrap_or_else(|_| "[]".to_string());
+    let env_json = serde_json::to_string(&env).unwrap_or_else(|_| "{}".to_string());
+
+    conn.execute(
+        "INSERT INTO mcp_servers (id, name, command, args, env, enabled, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)",
+        params![id, name, command, args_json, env_json, created_at],
+    ).map_err(|e| format!("Failed to add MCP server: {}", e))?;
+
+    Ok(McpServer {
+        id,
+        name,
+        command,
+        args,
+        env,
+        enabled: true,
+        created_at,
+    })
+}
+
+#[tauri::command]
+pub async fn update_mcp_server(
+    app: tauri::AppHandle,
+    id: String,
+    name: Option<String>,
+    command: Option<String>,
+    args: Option<Vec<String>>,
+    env: Option<std::collections::HashMap<String, String>>,
+    enabled: Option<bool>,
+) -> Result<McpServer, String> {
+    let db = app.state::<Arc<Database>>();
+    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+
+    // Get existing server
+    let mut stmt = conn.prepare("SELECT id, name, command, args, env, enabled, created_at FROM mcp_servers WHERE id = ?1")
+        .map_err(|e| e.to_string())?;
+    
+    let mut server: McpServer = stmt.query_row([&id], |row| {
+        let args_str: String = row.get(3)?;
+        let env_str: String = row.get(4)?;
+        Ok(McpServer {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            command: row.get(2)?,
+            args: serde_json::from_str(&args_str).unwrap_or_default(),
+            env: serde_json::from_str(&env_str).unwrap_or_default(),
+            enabled: row.get::<_, i32>(5)? != 0,
+            created_at: row.get(6)?,
+        })
+    }).map_err(|_| "MCP server not found".to_string())?;
+
+    // Apply updates
+    if let Some(n) = name { server.name = n; }
+    if let Some(c) = command { server.command = c; }
+    if let Some(a) = args { server.args = a; }
+    if let Some(e) = env { server.env = e; }
+    if let Some(en) = enabled { server.enabled = en; }
+
+    let args_json = serde_json::to_string(&server.args).unwrap_or_else(|_| "[]".to_string());
+    let env_json = serde_json::to_string(&server.env).unwrap_or_else(|_| "{}".to_string());
+
+    conn.execute(
+        "UPDATE mcp_servers SET name = ?1, command = ?2, args = ?3, env = ?4, enabled = ?5 WHERE id = ?6",
+        params![server.name, server.command, args_json, env_json, server.enabled as i32, id],
+    ).map_err(|e| format!("Failed to update MCP server: {}", e))?;
+
+    Ok(server)
+}
+
+#[tauri::command]
+pub async fn delete_mcp_server(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let db = app.state::<Arc<Database>>();
+    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+
+    let affected = conn.execute("DELETE FROM mcp_servers WHERE id = ?1", [&id])
+        .map_err(|e| format!("Failed to delete MCP server: {}", e))?;
+
+    if affected == 0 {
+        return Err("MCP server not found".to_string());
+    }
+
+    Ok(())
 }

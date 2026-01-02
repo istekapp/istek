@@ -294,6 +294,17 @@ export interface McpDiscoveryResult {
   error?: string
 }
 
+// Saved MCP Server (stored in database)
+export interface SavedMcpServer {
+  id: string
+  name: string
+  command: string
+  args: string[]
+  env: Record<string, string>
+  enabled: boolean
+  createdAt: number
+}
+
 // ============ Mock Server ============
 export interface MockEndpoint {
   id: string

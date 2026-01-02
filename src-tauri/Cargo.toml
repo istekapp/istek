@@ -1,10 +1,11 @@
 [package]
 name = "istek"
-version = "0.1.0"
-description = "A modern API client built with Tauri"
-authors = ["you"]
+version = "1.0.0"
+description = "A modern, open-source, multi-protocol API client"
+authors = ["Istek Team"]
 license = "MIT"
-repository = ""
+repository = "https://github.com/istekapp/istek"
+homepage = "https://istek.app"
 edition = "2021"
 rust-version = "1.83"
 

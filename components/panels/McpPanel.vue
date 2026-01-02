@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core'
-import type { McpRequest, McpTool, McpResource, McpPrompt, McpServerInfo, DiscoveredMcp, McpDiscoveryResult } from '~/types'
+import type { McpRequest, McpTool, McpResource, McpPrompt, McpServerInfo, DiscoveredMcp, McpDiscoveryResult, SavedMcpServer } from '~/types'
 import { generateId } from '~/lib/utils'
 
 const store = useAppStore()
@@ -9,8 +9,16 @@ const { activeTab } = store
 const request = computed(() => activeTab.value.request as McpRequest)
 const mcpState = computed(() => activeTab.value.mcpState!)
 
-// Connection mode: 'discover' or 'manual'
-const connectionMode = ref<'discover' | 'manual'>('discover')
+// Connection mode: 'saved' | 'discover' | 'manual'
+const connectionMode = ref<'saved' | 'discover' | 'manual'>('saved')
+
+// Saved servers state
+const savedServers = ref<SavedMcpServer[]>([])
+const isLoadingSaved = ref(false)
+const showSaveDialog = ref(false)
+const serverToSave = ref<{ name: string; command: string; args: string[]; env: Record<string, string> } | null>(null)
+const saveServerName = ref('')
+const editingServer = ref<SavedMcpServer | null>(null)
 
 // Discovery state
 const discoveryResults = ref<McpDiscoveryResult[]>([])
@@ -45,10 +53,70 @@ const getAppConfig = (source: string) => {
   return appConfig[source] || { icon: 'lucide:cpu', color: 'text-gray-400', bgColor: 'bg-gray-500/10' }
 }
 
-// Discover MCP configs on mount
+// Load saved servers and discover configs on mount
 onMounted(async () => {
+  await loadSavedServers()
   await discoverConfigs()
 })
+
+const loadSavedServers = async () => {
+  isLoadingSaved.value = true
+  try {
+    savedServers.value = await invoke<SavedMcpServer[]>('get_mcp_servers')
+    // If we have saved servers, default to saved tab
+    if (savedServers.value.length > 0) {
+      connectionMode.value = 'saved'
+    }
+  } catch (error) {
+    console.error('Failed to load saved MCP servers:', error)
+  } finally {
+    isLoadingSaved.value = false
+  }
+}
+
+const saveServer = async (server: { command: string; args: string[]; env: Record<string, string> }, name?: string) => {
+  serverToSave.value = { ...server, name: name || '' }
+  saveServerName.value = name || ''
+  showSaveDialog.value = true
+}
+
+const confirmSaveServer = async () => {
+  if (!serverToSave.value || !saveServerName.value.trim()) return
+  
+  try {
+    const newServer = await invoke<SavedMcpServer>('add_mcp_server', {
+      name: saveServerName.value.trim(),
+      command: serverToSave.value.command,
+      args: serverToSave.value.args,
+      env: serverToSave.value.env,
+    })
+    savedServers.value.push(newServer)
+    showSaveDialog.value = false
+    serverToSave.value = null
+    saveServerName.value = ''
+  } catch (error) {
+    console.error('Failed to save MCP server:', error)
+  }
+}
+
+const deleteSavedServer = async (server: SavedMcpServer) => {
+  try {
+    await invoke('delete_mcp_server', { id: server.id })
+    savedServers.value = savedServers.value.filter(s => s.id !== server.id)
+  } catch (error) {
+    console.error('Failed to delete MCP server:', error)
+  }
+}
+
+const connectToSavedServer = async (server: SavedMcpServer) => {
+  store.updateActiveRequest({
+    command: server.command,
+    args: server.args,
+    env: server.env,
+  })
+  
+  await connect()
+}
 
 const discoverConfigs = async () => {
   isDiscovering.value = true
@@ -86,10 +154,8 @@ const connectToServer = async (server: DiscoveredMcp) => {
   await connect()
 }
 
-const connectManual = async () => {
-  const args = manualArgs.value.trim() ? manualArgs.value.trim().split(/\s+/) : []
+const parseManualEnv = (): Record<string, string> => {
   const env: Record<string, string> = {}
-  
   if (manualEnv.value.trim()) {
     manualEnv.value.split('\n').forEach(line => {
       const idx = line.indexOf('=')
@@ -98,6 +164,12 @@ const connectManual = async () => {
       }
     })
   }
+  return env
+}
+
+const connectManual = async () => {
+  const args = manualArgs.value.trim() ? manualArgs.value.trim().split(/\s+/) : []
+  const env = parseManualEnv()
   
   store.updateActiveRequest({
     command: manualCommand.value,
@@ -106,6 +178,12 @@ const connectManual = async () => {
   })
   
   await connect()
+}
+
+const saveManualServer = () => {
+  const args = manualArgs.value.trim() ? manualArgs.value.trim().split(/\s+/) : []
+  const env = parseManualEnv()
+  saveServer({ command: manualCommand.value, args, env })
 }
 
 const connect = async () => {
@@ -319,7 +397,18 @@ onUnmounted(() => {
       <div class="border-b border-border p-4">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-lg font-semibold">MCP Client</h2>
-          <div class="flex items-center gap-2 bg-muted rounded-lg p-1">
+          <div class="flex items-center gap-1 bg-muted rounded-lg p-1">
+            <button
+              :class="[
+                'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                connectionMode === 'saved' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'
+              ]"
+              @click="connectionMode = 'saved'"
+            >
+              <Icon name="lucide:bookmark" class="h-4 w-4 mr-1.5 inline" />
+              Saved
+              <span v-if="savedServers.length > 0" class="ml-1 text-xs opacity-60">({{ savedServers.length }})</span>
+            </button>
             <button
               :class="[
                 'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
@@ -464,9 +553,112 @@ onUnmounted(() => {
                         </span>
                       </div>
                     </div>
+                    <div class="flex items-center gap-2">
+                      <UiButton
+                        size="sm"
+                        variant="outline"
+                        @click="saveServer({ command: server.command, args: server.args, env: server.env }, server.name)"
+                        title="Save to My Servers"
+                      >
+                        <Icon name="lucide:bookmark-plus" class="h-4 w-4" />
+                      </UiButton>
+                      <UiButton
+                        size="sm"
+                        @click="connectToServer(server)"
+                        :disabled="activeTab.isLoading"
+                      >
+                        <Icon v-if="activeTab.isLoading" name="lucide:loader-2" class="h-4 w-4 animate-spin mr-1.5" />
+                        <Icon v-else name="lucide:plug" class="h-4 w-4 mr-1.5" />
+                        Connect
+                      </UiButton>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </UiScrollArea>
+          </div>
+        </div>
+      </template>
+
+      <!-- Saved Mode -->
+      <template v-if="connectionMode === 'saved' && !isDiscovering">
+        <div class="flex-1 flex flex-col">
+          <div class="p-3 border-b border-border flex items-center justify-between">
+            <span class="text-sm font-medium">My MCP Servers</span>
+            <button
+              class="p-1 rounded hover:bg-accent"
+              title="Refresh"
+              @click="loadSavedServers"
+            >
+              <Icon name="lucide:refresh-cw" class="h-4 w-4 text-muted-foreground" />
+            </button>
+          </div>
+          
+          <UiScrollArea class="flex-1">
+            <div class="p-3 space-y-2">
+              <!-- Loading state -->
+              <div v-if="isLoadingSaved" class="flex items-center justify-center py-8">
+                <Icon name="lucide:loader-2" class="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+              
+              <!-- No saved servers -->
+              <div v-else-if="savedServers.length === 0" class="text-center py-12">
+                <Icon name="lucide:bookmark" class="h-12 w-12 mx-auto text-muted-foreground/50" />
+                <p class="mt-4 text-muted-foreground">No saved MCP servers</p>
+                <p class="text-sm text-muted-foreground/70 mt-1">
+                  Save servers from Discover tab or add manually
+                </p>
+                <div class="flex justify-center gap-2 mt-4">
+                  <UiButton variant="outline" size="sm" @click="connectionMode = 'discover'">
+                    <Icon name="lucide:search" class="h-4 w-4 mr-1.5" />
+                    Discover
+                  </UiButton>
+                  <UiButton variant="outline" size="sm" @click="connectionMode = 'manual'">
+                    <Icon name="lucide:plus" class="h-4 w-4 mr-1.5" />
+                    Add Manual
+                  </UiButton>
+                </div>
+              </div>
+              
+              <!-- Saved server cards -->
+              <div
+                v-else
+                v-for="server in savedServers"
+                :key="server.id"
+                class="border border-border rounded-lg p-4 hover:border-primary/50 transition-colors"
+              >
+                <div class="flex items-start justify-between gap-4">
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2">
+                      <Icon name="lucide:bookmark" class="h-4 w-4 text-primary" />
+                      <h3 class="font-medium truncate">{{ server.name }}</h3>
+                    </div>
+                    <p class="text-sm text-muted-foreground font-mono mt-1 truncate">
+                      {{ server.command }} {{ server.args.join(' ') }}
+                    </p>
+                    <div v-if="Object.keys(server.env).length > 0" class="mt-2 flex flex-wrap gap-1">
+                      <span
+                        v-for="(value, key) in server.env"
+                        :key="key"
+                        class="text-xs bg-muted px-1.5 py-0.5 rounded font-mono"
+                      >
+                        {{ key }}
+                      </span>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-2">
                     <UiButton
                       size="sm"
-                      @click="connectToServer(server)"
+                      variant="ghost"
+                      @click="deleteSavedServer(server)"
+                      title="Delete"
+                      class="text-destructive hover:text-destructive"
+                    >
+                      <Icon name="lucide:trash-2" class="h-4 w-4" />
+                    </UiButton>
+                    <UiButton
+                      size="sm"
+                      @click="connectToSavedServer(server)"
                       :disabled="activeTab.isLoading"
                     >
                       <Icon v-if="activeTab.isLoading" name="lucide:loader-2" class="h-4 w-4 animate-spin mr-1.5" />
@@ -476,8 +668,8 @@ onUnmounted(() => {
                   </div>
                 </div>
               </div>
-            </UiScrollArea>
-          </div>
+            </div>
+          </UiScrollArea>
         </div>
       </template>
       
@@ -514,15 +706,26 @@ onUnmounted(() => {
             <p class="text-xs text-muted-foreground mt-1">One per line, KEY=VALUE format</p>
           </div>
           
-          <UiButton
-            @click="connectManual"
-            :disabled="!manualCommand.trim() || activeTab.isLoading"
-            class="w-full"
-          >
-            <Icon v-if="activeTab.isLoading" name="lucide:loader-2" class="h-4 w-4 animate-spin mr-2" />
-            <Icon v-else name="lucide:plug" class="h-4 w-4 mr-2" />
-            Connect
-          </UiButton>
+          <div class="flex gap-2">
+            <UiButton
+              variant="outline"
+              @click="saveManualServer"
+              :disabled="!manualCommand.trim()"
+              class="flex-1"
+            >
+              <Icon name="lucide:bookmark-plus" class="h-4 w-4 mr-2" />
+              Save
+            </UiButton>
+            <UiButton
+              @click="connectManual"
+              :disabled="!manualCommand.trim() || activeTab.isLoading"
+              class="flex-1"
+            >
+              <Icon v-if="activeTab.isLoading" name="lucide:loader-2" class="h-4 w-4 animate-spin mr-2" />
+              <Icon v-else name="lucide:plug" class="h-4 w-4 mr-2" />
+              Connect
+            </UiButton>
+          </div>
           
           <!-- Example servers -->
           <div class="pt-4 border-t border-border">
@@ -769,5 +972,60 @@ onUnmounted(() => {
         </div>
       </div>
     </template>
+
+    <!-- Save Server Dialog -->
+    <Teleport to="body">
+      <div
+        v-if="showSaveDialog"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        @click.self="showSaveDialog = false"
+      >
+        <div class="bg-background border border-border rounded-lg shadow-lg w-full max-w-md p-6 space-y-4">
+          <div class="flex items-center justify-between">
+            <h3 class="text-lg font-semibold">Save MCP Server</h3>
+            <button
+              class="p-1 rounded hover:bg-accent"
+              @click="showSaveDialog = false"
+            >
+              <Icon name="lucide:x" class="h-5 w-5" />
+            </button>
+          </div>
+          
+          <div>
+            <label class="text-sm font-medium mb-1.5 block">Server Name</label>
+            <UiInput
+              v-model="saveServerName"
+              placeholder="My MCP Server"
+              @keyup.enter="confirmSaveServer"
+            />
+          </div>
+          
+          <div v-if="serverToSave" class="bg-muted rounded-lg p-3 space-y-1">
+            <p class="text-sm font-mono text-muted-foreground truncate">
+              {{ serverToSave.command }} {{ serverToSave.args.join(' ') }}
+            </p>
+            <div v-if="Object.keys(serverToSave.env).length > 0" class="flex flex-wrap gap-1 mt-2">
+              <span
+                v-for="(value, key) in serverToSave.env"
+                :key="key"
+                class="text-xs bg-background px-1.5 py-0.5 rounded font-mono"
+              >
+                {{ key }}
+              </span>
+            </div>
+          </div>
+          
+          <div class="flex justify-end gap-2">
+            <UiButton variant="outline" @click="showSaveDialog = false">
+              Cancel
+            </UiButton>
+            <UiButton @click="confirmSaveServer" :disabled="!saveServerName.trim()">
+              <Icon name="lucide:bookmark-plus" class="h-4 w-4 mr-1.5" />
+              Save
+            </UiButton>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>

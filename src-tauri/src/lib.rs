@@ -109,6 +109,11 @@ pub fn run() {
             // Database - Secret Providers
             database::save_secret_provider,
             database::delete_secret_provider,
+            // Database - MCP Servers
+            database::get_mcp_servers,
+            database::add_mcp_server,
+            database::update_mcp_server,
+            database::delete_mcp_server,
             // Database - Settings
             database::save_active_environment_id,
             // Database - Test Runs

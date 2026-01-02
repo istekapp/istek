@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "istek",
-  "version": "0.1.0",
+  "productName": "Istek",
+  "version": "1.0.0",
   "identifier": "com.istek.app",
   "build": {
     "frontendDist": "../.output/public",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "istek",
+        "title": "Istek",
         "width": 1400,
         "height": 900,
         "minWidth": 900,
@@ -35,6 +35,35 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "Multi-Protocol API Client",
+    "longDescription": "Istek is a modern, open-source, multi-protocol API client for developers. Test HTTP, GraphQL, gRPC, WebSocket, MQTT, and Unix Sockets in one native desktop app.",
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "dmg": {
+        "appPosition": { "x": 180, "y": 170 },
+        "applicationFolderPosition": { "x": 480, "y": 170 },
+        "windowSize": { "width": 660, "height": 400 }
+      }
+    },
+    "windows": {
+      "wix": {
+        "language": "en-US"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English"],
+        "displayLanguageSelector": false
+      }
+    },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      },
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      }
+    }
   }
 }

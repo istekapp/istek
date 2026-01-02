@@ -111,6 +111,55 @@ const playgroundEndpoints = computed(() => {
   ].filter(e => e.url)
 })
 
+// API Server state (Internal REST API on port 47835)
+const API_BASE_URL = 'http://localhost:47835'
+const apiStatus = ref<{ status: string; version: string } | null>(null)
+const apiLoading = ref(false)
+const apiCopied = ref<string | null>(null)
+
+// Load API status when tab changes
+watch(variableManagerTab, async (tab) => {
+  if (tab === 'api') {
+    await loadApiStatus()
+  }
+})
+
+const loadApiStatus = async () => {
+  apiLoading.value = true
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/health`)
+    if (response.ok) {
+      apiStatus.value = await response.json()
+    } else {
+      apiStatus.value = null
+    }
+  } catch (e: any) {
+    apiStatus.value = null
+    console.error('Failed to load API status:', e)
+  } finally {
+    apiLoading.value = false
+  }
+}
+
+const copyApiUrl = async (url: string, key: string) => {
+  try {
+    await navigator.clipboard.writeText(url)
+    apiCopied.value = key
+    setTimeout(() => {
+      apiCopied.value = null
+    }, 2000)
+  } catch (e) {
+    console.error('Failed to copy:', e)
+  }
+}
+
+const apiEndpoints = computed(() => [
+  { key: 'base', name: 'API Base URL', url: `${API_BASE_URL}/api`, icon: 'lucide:server', color: 'text-blue-500', bgColor: 'bg-blue-500/10', description: 'Base URL for all API endpoints' },
+  { key: 'health', name: 'Health Check', url: `${API_BASE_URL}/api/health`, icon: 'lucide:heart-pulse', color: 'text-green-500', bgColor: 'bg-green-500/10', description: 'Check if API is running' },
+  { key: 'openapi', name: 'OpenAPI Spec', url: `${API_BASE_URL}/api/openapi.json`, icon: 'lucide:file-json', color: 'text-cyan-500', bgColor: 'bg-cyan-500/10', description: 'OpenAPI 3.0 specification' },
+  { key: 'swagger', name: 'Swagger UI', url: `${API_BASE_URL}/api/docs`, icon: 'lucide:book-open', color: 'text-orange-500', bgColor: 'bg-orange-500/10', description: 'Interactive API documentation' },
+])
+
 const closeModal = () => {
   variableStore.closeVariableManager()
 }
@@ -504,6 +553,7 @@ watch(variableTestResults, (results) => {
               { id: 'environments', label: 'Environments', icon: 'lucide:layers' },
               { id: 'integrations', label: 'Integrations', icon: 'lucide:plug-zap' },
               { id: 'playground', label: 'Playground', icon: 'lucide:play-circle' },
+              { id: 'api', label: 'API', icon: 'lucide:server' },
             ]"
             :key="tab.id"
             :class="[
@@ -1564,6 +1614,139 @@ watch(variableTestResults, (results) => {
                     <span>gRPC with reflection support</span>
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- API Tab -->
+          <div v-else-if="variableManagerTab === 'api'" class="space-y-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-lg font-semibold">Internal REST API</h3>
+                <p class="text-sm text-muted-foreground">
+                  Access Istek data programmatically via REST API on port 47835
+                </p>
+              </div>
+              <UiButton
+                variant="outline"
+                size="sm"
+                :disabled="apiLoading"
+                @click="loadApiStatus"
+              >
+                <Icon 
+                  v-if="apiLoading" 
+                  name="lucide:loader-2" 
+                  class="h-4 w-4 mr-2 animate-spin" 
+                />
+                <Icon 
+                  v-else 
+                  name="lucide:refresh-cw" 
+                  class="h-4 w-4 mr-2" 
+                />
+                Refresh Status
+              </UiButton>
+            </div>
+
+            <!-- Status indicator -->
+            <div 
+              class="p-4 rounded-lg border"
+              :class="apiStatus ? 'border-green-500/30 bg-green-500/5' : 'border-destructive/30 bg-destructive/5'"
+            >
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <div 
+                    class="h-3 w-3 rounded-full"
+                    :class="apiStatus ? 'bg-green-500 animate-pulse' : 'bg-destructive'"
+                  />
+                  <span class="font-medium">
+                    {{ apiStatus ? 'API Running' : 'API Not Available' }}
+                  </span>
+                </div>
+                <span v-if="apiStatus" class="text-sm text-muted-foreground">
+                  Version {{ apiStatus.version }}
+                </span>
+              </div>
+              <p v-if="!apiStatus" class="text-sm text-muted-foreground mt-2">
+                Make sure Istek is running. The API starts automatically with the app.
+              </p>
+            </div>
+
+            <!-- API Endpoints -->
+            <div class="space-y-4">
+              <h4 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Endpoints</h4>
+              
+              <div class="space-y-3">
+                <div
+                  v-for="endpoint in apiEndpoints"
+                  :key="endpoint.key"
+                  class="group flex items-center gap-3 p-4 rounded-lg border border-border bg-background hover:bg-accent/50 transition-colors"
+                >
+                  <div class="h-10 w-10 rounded-lg flex items-center justify-center" :class="endpoint.bgColor">
+                    <Icon :name="endpoint.icon" :class="['h-5 w-5', endpoint.color]" />
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <div class="font-medium">{{ endpoint.name }}</div>
+                    <div class="text-xs text-muted-foreground mb-1">{{ endpoint.description }}</div>
+                    <div class="text-sm text-muted-foreground truncate font-mono">
+                      {{ endpoint.url }}
+                    </div>
+                  </div>
+                  <button
+                    class="p-2 rounded-md hover:bg-accent transition-all flex items-center gap-2"
+                    :class="apiCopied === endpoint.key ? 'bg-green-500/10 text-green-500' : 'text-muted-foreground'"
+                    :title="apiCopied === endpoint.key ? 'Copied!' : 'Copy URL'"
+                    @click="copyApiUrl(endpoint.url, endpoint.key)"
+                  >
+                    <Icon 
+                      :name="apiCopied === endpoint.key ? 'lucide:check' : 'lucide:copy'" 
+                      class="h-4 w-4" 
+                    />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- MCP Integration Info -->
+            <div class="bg-muted/30 rounded-lg p-6 space-y-4">
+              <div class="flex items-center gap-3">
+                <div class="h-10 w-10 rounded-lg bg-purple-500/10 flex items-center justify-center">
+                  <Icon name="lucide:bot" class="h-5 w-5 text-purple-500" />
+                </div>
+                <div>
+                  <h4 class="font-medium">MCP Integration</h4>
+                  <p class="text-sm text-muted-foreground">Use with AI assistants like Claude</p>
+                </div>
+              </div>
+              
+              <p class="text-sm text-muted-foreground">
+                The Istek MCP server connects AI assistants to this API, enabling them to manage your workspaces, 
+                collections, environments, and more through natural language.
+              </p>
+
+              <div class="flex items-center gap-2">
+                <a 
+                  href="https://github.com/istekapp/mcp" 
+                  target="_blank"
+                  class="text-sm text-primary hover:underline flex items-center gap-1"
+                >
+                  <Icon name="lucide:github" class="h-4 w-4" />
+                  View MCP Server on GitHub
+                  <Icon name="lucide:external-link" class="h-3 w-3" />
+                </a>
+              </div>
+            </div>
+
+            <!-- Quick Reference -->
+            <div class="space-y-4">
+              <h4 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Quick Reference</h4>
+              
+              <div class="bg-muted/30 rounded-lg p-4 font-mono text-sm space-y-2">
+                <div class="text-muted-foreground"># List all workspaces</div>
+                <div class="text-foreground">curl {{ API_BASE_URL }}/api/workspaces</div>
+                <div class="text-muted-foreground mt-4"># List collections in a workspace</div>
+                <div class="text-foreground">curl {{ API_BASE_URL }}/api/workspaces/:id/collections</div>
+                <div class="text-muted-foreground mt-4"># View Swagger documentation</div>
+                <div class="text-foreground">open {{ API_BASE_URL }}/api/docs</div>
               </div>
             </div>
           </div>

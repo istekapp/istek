@@ -37,8 +37,8 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "Multi-Protocol API Client",
-    "longDescription": "Istek is a modern, open-source, multi-protocol API client for developers. Test HTTP, GraphQL, gRPC, WebSocket, MQTT, and Unix Sockets in one native desktop app.",
+    "shortDescription": "AI-Native Multi-Protocol API Client",
+    "longDescription": "Istek is the first AI-native API client. Connect Claude, GPT, or any MCP-compatible AI agent to manage your APIs through natural language. Test HTTP, GraphQL, gRPC, WebSocket, MQTT, and Unix Sockets in one native desktop app. Free, open-source, and privacy-first.",
     "macOS": {
       "minimumSystemVersion": "10.15",
       "dmg": {

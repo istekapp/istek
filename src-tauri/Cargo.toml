@@ -1,7 +1,7 @@
 [package]
 name = "istek"
 version = "1.0.0"
-description = "A modern, open-source, multi-protocol API client"
+description = "AI-native, multi-protocol API client with MCP integration for Claude, GPT, and other AI agents"
 authors = ["Istek Team"]
 license = "MIT"
 repository = "https://github.com/istekapp/istek"

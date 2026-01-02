@@ -1,10 +1,3 @@
-use fake::faker::address::en::*;
-use fake::faker::company::en::*;
-use fake::faker::internet::en::*;
-use fake::faker::lorem::en::*;
-use fake::faker::name::en::*;
-use fake::faker::phone_number::en::*;
-use fake::Fake;
 use rand::Rng;
 use serde_json::Value;
 
@@ -89,14 +82,14 @@ fn generate_fake_string(schema: &Value) -> Value {
         return match format {
             "date" => Value::String(generate_date()),
             "date-time" => Value::String(generate_datetime()),
-            "email" => Value::String(FreeEmail().fake()),
-            "uri" | "url" => Value::String(format!("https://{}", DomainSuffix().fake::<String>())),
+            "email" => Value::String(generate_email()),
+            "uri" | "url" => Value::String(generate_url()),
             "uuid" => Value::String(uuid::Uuid::new_v4().to_string()),
-            "hostname" => Value::String(DomainSuffix().fake()),
-            "ipv4" => Value::String(IPv4().fake()),
-            "ipv6" => Value::String(IPv6().fake()),
-            "phone" => Value::String(PhoneNumber().fake()),
-            "password" => Value::String(Password(8..16).fake()),
+            "hostname" => Value::String(generate_domain()),
+            "ipv4" => Value::String(generate_ipv4()),
+            "ipv6" => Value::String(generate_ipv6()),
+            "phone" => Value::String(generate_phone()),
+            "password" => Value::String(generate_password()),
             "byte" => Value::String(base64::Engine::encode(
                 &base64::engine::general_purpose::STANDARD,
                 b"sample data",
@@ -119,19 +112,18 @@ fn generate_smart_string(schema: &Value) -> String {
     let max_len = schema.get("maxLength").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
 
     // Check for pattern (regex) - simplified handling
-    if let Some(_pattern) = schema.get("pattern").and_then(|p| p.as_str()) {
-        // For patterns, just generate a placeholder that indicates the pattern
+    if schema.get("pattern").and_then(|p| p.as_str()).is_some() {
         return "pattern-matched-string".to_string();
     }
 
-    // Default generation - use lorem ipsum words
+    // Default generation - use random words
     let word_count = rng.random_range(1..=3);
-    let words: Vec<String> = (0..word_count).map(|_| Word().fake()).collect();
+    let words: Vec<String> = (0..word_count).map(|_| generate_word()).collect();
     let result = words.join(" ");
 
     // Respect length constraints
     if result.len() < min_len {
-        let padding: String = Words(1..(min_len / 4 + 2)).fake::<Vec<String>>().join(" ");
+        let padding = generate_words(min_len / 4 + 2);
         return format!("{} {}", result, padding)[..max_len.min(result.len() + padding.len() + 1)].to_string();
     }
     if result.len() > max_len && max_len > 0 {
@@ -204,6 +196,212 @@ fn generate_fake_boolean() -> Value {
     Value::Bool(rng.random_bool(0.5))
 }
 
+// ============================================================================
+// Simple cross-platform fake data generators (no external faker dependencies)
+// ============================================================================
+
+const FIRST_NAMES: &[&str] = &[
+    "James", "Mary", "John", "Patricia", "Robert", "Jennifer", "Michael", "Linda",
+    "William", "Elizabeth", "David", "Barbara", "Richard", "Susan", "Joseph", "Jessica",
+    "Thomas", "Sarah", "Charles", "Karen", "Christopher", "Lisa", "Daniel", "Nancy"
+];
+
+const LAST_NAMES: &[&str] = &[
+    "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis",
+    "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson",
+    "Thomas", "Taylor", "Moore", "Jackson", "Martin", "Lee", "Perez", "Thompson", "White"
+];
+
+const CITIES: &[&str] = &[
+    "New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Philadelphia",
+    "San Antonio", "San Diego", "Dallas", "San Jose", "Austin", "Jacksonville",
+    "Fort Worth", "Columbus", "Charlotte", "Seattle", "Denver", "Boston", "Portland"
+];
+
+const STATES: &[&str] = &[
+    "California", "Texas", "Florida", "New York", "Pennsylvania", "Illinois",
+    "Ohio", "Georgia", "North Carolina", "Michigan", "New Jersey", "Virginia",
+    "Washington", "Arizona", "Massachusetts", "Tennessee", "Indiana", "Missouri"
+];
+
+const COUNTRIES: &[&str] = &[
+    "United States", "Canada", "United Kingdom", "Germany", "France", "Australia",
+    "Japan", "Brazil", "India", "Mexico", "Spain", "Italy", "Netherlands", "Sweden"
+];
+
+const COMPANIES: &[&str] = &[
+    "Acme Corp", "Globex", "Initech", "Umbrella Corp", "Stark Industries",
+    "Wayne Enterprises", "Cyberdyne Systems", "Tyrell Corporation", "Massive Dynamic",
+    "Soylent Corp", "Oscorp", "LexCorp", "Aperture Science", "Black Mesa"
+];
+
+const JOB_TITLES: &[&str] = &[
+    "Software Engineer", "Product Manager", "Data Scientist", "UX Designer",
+    "DevOps Engineer", "Marketing Manager", "Sales Representative", "HR Specialist",
+    "Financial Analyst", "Project Manager", "QA Engineer", "Technical Writer"
+];
+
+const DEPARTMENTS: &[&str] = &[
+    "Engineering", "Marketing", "Sales", "Human Resources", "Finance",
+    "Operations", "Customer Support", "Research", "Legal", "IT"
+];
+
+const WORDS: &[&str] = &[
+    "lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "adipiscing", "elit",
+    "sed", "do", "eiusmod", "tempor", "incididunt", "ut", "labore", "et", "dolore",
+    "magna", "aliqua", "enim", "ad", "minim", "veniam", "quis", "nostrud"
+];
+
+const DOMAINS: &[&str] = &[
+    "example.com", "test.com", "demo.org", "sample.net", "mock.io", "fake.dev"
+];
+
+fn generate_first_name() -> String {
+    let mut rng = rand::rng();
+    FIRST_NAMES[rng.random_range(0..FIRST_NAMES.len())].to_string()
+}
+
+fn generate_last_name() -> String {
+    let mut rng = rand::rng();
+    LAST_NAMES[rng.random_range(0..LAST_NAMES.len())].to_string()
+}
+
+fn generate_full_name() -> String {
+    format!("{} {}", generate_first_name(), generate_last_name())
+}
+
+fn generate_username() -> String {
+    let mut rng = rand::rng();
+    let first = generate_first_name().to_lowercase();
+    let num: u32 = rng.random_range(1..999);
+    format!("{}{}", first, num)
+}
+
+fn generate_email() -> String {
+    let mut rng = rand::rng();
+    let username = generate_username();
+    let domain = DOMAINS[rng.random_range(0..DOMAINS.len())];
+    format!("{}@{}", username, domain)
+}
+
+fn generate_phone() -> String {
+    let mut rng = rand::rng();
+    format!(
+        "+1-{:03}-{:03}-{:04}",
+        rng.random_range(200..999),
+        rng.random_range(200..999),
+        rng.random_range(1000..9999)
+    )
+}
+
+fn generate_city() -> String {
+    let mut rng = rand::rng();
+    CITIES[rng.random_range(0..CITIES.len())].to_string()
+}
+
+fn generate_state() -> String {
+    let mut rng = rand::rng();
+    STATES[rng.random_range(0..STATES.len())].to_string()
+}
+
+fn generate_country() -> String {
+    let mut rng = rand::rng();
+    COUNTRIES[rng.random_range(0..COUNTRIES.len())].to_string()
+}
+
+fn generate_zipcode() -> String {
+    let mut rng = rand::rng();
+    format!("{:05}", rng.random_range(10000..99999))
+}
+
+fn generate_street_address() -> String {
+    let mut rng = rand::rng();
+    let num = rng.random_range(100..9999);
+    let streets = ["Main St", "Oak Ave", "Maple Dr", "Park Blvd", "Cedar Ln", "Pine Rd"];
+    let street = streets[rng.random_range(0..streets.len())];
+    format!("{} {}", num, street)
+}
+
+fn generate_url() -> String {
+    let mut rng = rand::rng();
+    let domain = DOMAINS[rng.random_range(0..DOMAINS.len())];
+    format!("https://www.{}", domain)
+}
+
+fn generate_domain() -> String {
+    let mut rng = rand::rng();
+    DOMAINS[rng.random_range(0..DOMAINS.len())].to_string()
+}
+
+fn generate_ipv4() -> String {
+    let mut rng = rand::rng();
+    format!(
+        "{}.{}.{}.{}",
+        rng.random_range(1..255),
+        rng.random_range(0..255),
+        rng.random_range(0..255),
+        rng.random_range(1..255)
+    )
+}
+
+fn generate_ipv6() -> String {
+    let mut rng = rand::rng();
+    let parts: Vec<String> = (0..8)
+        .map(|_| format!("{:04x}", rng.random_range(0..65535u32)))
+        .collect();
+    parts.join(":")
+}
+
+fn generate_company() -> String {
+    let mut rng = rand::rng();
+    COMPANIES[rng.random_range(0..COMPANIES.len())].to_string()
+}
+
+fn generate_job_title() -> String {
+    let mut rng = rand::rng();
+    JOB_TITLES[rng.random_range(0..JOB_TITLES.len())].to_string()
+}
+
+fn generate_department() -> String {
+    let mut rng = rand::rng();
+    DEPARTMENTS[rng.random_range(0..DEPARTMENTS.len())].to_string()
+}
+
+fn generate_word() -> String {
+    let mut rng = rand::rng();
+    WORDS[rng.random_range(0..WORDS.len())].to_string()
+}
+
+fn generate_words(count: usize) -> String {
+    (0..count).map(|_| generate_word()).collect::<Vec<_>>().join(" ")
+}
+
+fn generate_sentence(word_count: usize) -> String {
+    let words = generate_words(word_count);
+    let mut chars: Vec<char> = words.chars().collect();
+    if !chars.is_empty() {
+        chars[0] = chars[0].to_uppercase().next().unwrap_or(chars[0]);
+    }
+    format!("{}.", chars.into_iter().collect::<String>())
+}
+
+fn generate_sentences(count: usize) -> String {
+    let mut rng = rand::rng();
+    (0..count)
+        .map(|_| generate_sentence(rng.random_range(5..12)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn generate_password() -> String {
+    let mut rng = rand::rng();
+    let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%";
+    let chars: Vec<char> = chars.chars().collect();
+    (0..12)
+        .map(|_| chars[rng.random_range(0..chars.len())])
+        .collect()
+}
+
 fn generate_date() -> String {
     let mut rng = rand::rng();
     let year = rng.random_range(2020..=2025);
@@ -251,7 +449,7 @@ fn generate_from_property_name(name: &str, schema: &Value) -> String {
     let name_lower = name.to_lowercase();
 
     // Check format first
-    if let Some(format) = schema.get("format").and_then(|f| f.as_str()) {
+    if schema.get("format").and_then(|f| f.as_str()).is_some() {
         if let Value::String(s) = generate_fake_string(schema) {
             return s;
         }
@@ -263,39 +461,39 @@ fn generate_from_property_name(name: &str, schema: &Value) -> String {
         "id" | "uuid" | "guid" => uuid::Uuid::new_v4().to_string(),
         
         // Names
-        "name" | "fullname" | "full_name" => format!("{} {}", FirstName().fake::<String>(), LastName().fake::<String>()),
-        "firstname" | "first_name" | "givenname" => FirstName().fake(),
-        "lastname" | "last_name" | "familyname" | "surname" => LastName().fake(),
-        "username" | "user_name" | "login" => Username().fake(),
-        "nickname" => Username().fake(),
+        "name" | "fullname" | "full_name" => generate_full_name(),
+        "firstname" | "first_name" | "givenname" => generate_first_name(),
+        "lastname" | "last_name" | "familyname" | "surname" => generate_last_name(),
+        "username" | "user_name" | "login" => generate_username(),
+        "nickname" => generate_username(),
         
         // Contact
-        "email" | "emailaddress" | "email_address" => FreeEmail().fake(),
-        "phone" | "phonenumber" | "phone_number" | "mobile" | "telephone" => PhoneNumber().fake(),
+        "email" | "emailaddress" | "email_address" => generate_email(),
+        "phone" | "phonenumber" | "phone_number" | "mobile" | "telephone" => generate_phone(),
         
         // Address
-        "address" | "streetaddress" | "street_address" => format!("{} {} Street", rand::rng().random_range(100..9999), Word().fake::<String>()),
-        "city" | "cityname" => CityName().fake(),
-        "state" | "statename" => StateName().fake(),
-        "country" | "countryname" => CountryName().fake(),
-        "zipcode" | "zip_code" | "postalcode" | "postal_code" | "zip" => PostCode().fake(),
+        "address" | "streetaddress" | "street_address" => generate_street_address(),
+        "city" | "cityname" => generate_city(),
+        "state" | "statename" => generate_state(),
+        "country" | "countryname" => generate_country(),
+        "zipcode" | "zip_code" | "postalcode" | "postal_code" | "zip" => generate_zipcode(),
         "latitude" | "lat" => format!("{:.6}", rand::rng().random_range(-90.0..90.0f64)),
         "longitude" | "lng" | "lon" => format!("{:.6}", rand::rng().random_range(-180.0..180.0f64)),
         
         // Internet
-        "url" | "website" | "homepage" | "link" => format!("https://www.{}", DomainSuffix().fake::<String>()),
-        "domain" | "domainname" | "hostname" => DomainSuffix().fake(),
-        "ip" | "ipaddress" | "ip_address" => IPv4().fake(),
+        "url" | "website" | "homepage" | "link" => generate_url(),
+        "domain" | "domainname" | "hostname" => generate_domain(),
+        "ip" | "ipaddress" | "ip_address" => generate_ipv4(),
         
         // Company
-        "company" | "companyname" | "company_name" | "organization" => CompanyName().fake(),
-        "jobtitle" | "job_title" | "position" => Profession().fake(),
-        "department" => Industry().fake(),
+        "company" | "companyname" | "company_name" | "organization" => generate_company(),
+        "jobtitle" | "job_title" | "position" => generate_job_title(),
+        "department" => generate_department(),
         
         // Text content
-        "description" | "desc" | "summary" | "bio" | "about" => Sentences(2..4).fake::<Vec<String>>().join(" "),
-        "comment" | "note" | "notes" | "message" | "text" | "content" => Sentence(3..8).fake(),
-        "title" | "headline" | "subject" => Words(2..5).fake::<Vec<String>>().join(" "),
+        "description" | "desc" | "summary" | "bio" | "about" => generate_sentences(3),
+        "comment" | "note" | "notes" | "message" | "text" | "content" => generate_sentence(8),
+        "title" | "headline" | "subject" => generate_words(4),
         
         // Dates
         "date" | "createdat" | "created_at" | "updatedat" | "updated_at" | 
@@ -329,10 +527,11 @@ fn generate_from_property_name(name: &str, schema: &Value) -> String {
         
         // Codes/References
         "code" | "sku" | "productcode" | "product_code" => {
+            let mut rng = rand::rng();
             format!("{}{}{}",
-                (b'A' + rand::rng().random_range(0..26u8)) as char,
-                (b'A' + rand::rng().random_range(0..26u8)) as char,
-                rand::rng().random_range(1000..9999)
+                (b'A' + rng.random_range(0..26u8)) as char,
+                (b'A' + rng.random_range(0..26u8)) as char,
+                rng.random_range(1000..9999)
             )
         }
         
@@ -342,13 +541,10 @@ fn generate_from_property_name(name: &str, schema: &Value) -> String {
         }
         
         // Password (masked for security)
-        "password" | "pass" | "secret" => Password(12..16).fake(),
+        "password" | "pass" | "secret" => generate_password(),
         
         // Default - generate lorem words
-        _ => {
-            let words: Vec<String> = Words(1..3).fake();
-            words.join(" ")
-        }
+        _ => generate_words(2)
     }
 }
 
@@ -361,6 +557,7 @@ pub fn generate_fake_json(schema: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_simple_object() {

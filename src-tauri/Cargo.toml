@@ -96,8 +96,7 @@ keyring = "3"
 # JSONPath for test assertions
 jsonpath-rust = "0.7"
 
-# Fake data generation for mock responses
-fake = { version = "3.1", features = ["derive"] }
+# Random data generation for mock responses
 rand = "0.9"
 
 # Playground server

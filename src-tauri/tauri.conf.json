@@ -8,6 +8,18 @@
     "beforeDevCommand": "npm run build",
     "beforeBuildCommand": "npm run build"
   },
+  "plugins": {
+    "shell": {
+      "open": true,
+      "scope": [
+        {
+          "name": "run-mcp",
+          "cmd": "",
+          "args": true
+        }
+      ]
+    }
+  },
   "app": {
     "windows": [
       {

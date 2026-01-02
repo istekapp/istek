@@ -1,0 +1,117 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+    --radius: 0.5rem;
+  }
+
+  /* Pastel Dark Theme */
+  .dark {
+    --background: 240 15% 8%;
+    --foreground: 220 20% 90%;
+    --card: 240 12% 10%;
+    --card-foreground: 220 20% 90%;
+    --popover: 240 12% 12%;
+    --popover-foreground: 220 20% 90%;
+    --primary: 250 80% 75%;
+    --primary-foreground: 240 15% 8%;
+    --secondary: 240 10% 16%;
+    --secondary-foreground: 220 20% 90%;
+    --muted: 240 10% 16%;
+    --muted-foreground: 220 15% 60%;
+    --accent: 240 10% 18%;
+    --accent-foreground: 220 20% 90%;
+    --destructive: 0 60% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 10% 18%;
+    --input: 240 10% 18%;
+    --ring: 250 80% 75%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  html {
+    font-size: 16px;
+  }
+  
+  body {
+    @apply bg-background text-foreground font-sans antialiased text-base;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-muted;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-muted-foreground/30 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-muted-foreground/50;
+}
+
+/* Thin scrollbar for tabs */
+.scrollbar-thin::-webkit-scrollbar {
+  height: 4px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  @apply bg-border rounded-full;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  @apply bg-muted-foreground/30;
+}
+
+/* Method badge colors - Pastel versions */
+.method-get { @apply text-method-get; }
+.method-post { @apply text-method-post; }
+.method-put { @apply text-method-put; }
+.method-patch { @apply text-method-patch; }
+.method-delete { @apply text-method-delete; }
+.method-head { @apply text-method-head; }
+.method-options { @apply text-method-options; }
+
+.method-badge-get { @apply bg-method-get/20 text-method-get border-method-get/30; }
+.method-badge-post { @apply bg-method-post/20 text-method-post border-method-post/30; }
+.method-badge-put { @apply bg-method-put/20 text-method-put border-method-put/30; }
+.method-badge-patch { @apply bg-method-patch/20 text-method-patch border-method-patch/30; }
+.method-badge-delete { @apply bg-method-delete/20 text-method-delete border-method-delete/30; }
+.method-badge-head { @apply bg-method-head/20 text-method-head border-method-head/30; }
+.method-badge-options { @apply bg-method-options/20 text-method-options border-method-options/30; }

@@ -1,0 +1,121 @@
+[package]
+name = "istek"
+version = "0.1.0"
+description = "A modern API client built with Tauri"
+authors = ["you"]
+license = "MIT"
+repository = ""
+edition = "2021"
+rust-version = "1.83"
+
+[lib]
+name = "istek_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5.3", features = [] }
+tonic-build = "0.12"
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.9.5", features = [] }
+tauri-plugin-log = "2"
+urlencoding = "2.1"
+uuid = { version = "1.0", features = ["v4"] }
+
+# HTTP
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+mime_guess = "2.0"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# WebSocket
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"
+
+# MQTT
+rumqttc = "0.24"
+
+# Unix Socket (HTTP over Unix Socket) and Mock Server
+hyper = { version = "1.4", features = ["client", "server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "server", "http1", "http2", "tokio"] }
+http-body-util = "0.1"
+hyperlocal = "0.9"
+
+# gRPC
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+
+# For managing connections
+once_cell = "1.19"
+dashmap = "6.0"
+base64 = "0.22"
+
+# SQLite for persistence
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# MCP (Model Context Protocol)
+async-process = "2.3"
+tauri-plugin-shell = "2"
+dirs = "5.0"
+
+# Mock Server
+axum = { version = "0.7", features = ["http1", "ws"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
+chrono = "0.4"
+regex = "1.10"
+url = "2.5"
+
+# Secret Providers (AWS, GCP, Azure) & Template Functions
+sha2 = "0.10"
+sha1 = "0.10"
+md-5 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+rsa = { version = "0.9", features = ["sha2"] }
+signature = "2.2"
+
+# AWS SDK
+aws-config = "1.5"
+aws-sdk-sts = "1.50"
+aws-sdk-secretsmanager = "1.55"
+aws-credential-types = "1.2"
+
+# System Keychain for encrypt() function
+keyring = "3"
+
+# JSONPath for test assertions
+jsonpath-rust = "0.7"
+
+# Fake data generation for mock responses
+fake = { version = "3.1", features = ["derive"] }
+rand = "0.9"
+
+# Playground server
+async-graphql = "7.0"
+tonic-reflection = "0.12"
+async-stream = "0.3"
+tokio-stream = "0.1"
+
+# JavaScript runtime for pre/post request scripts
+rquickjs = { version = "0.8", features = ["bindgen", "classes", "futures", "macro"] }
+
+# YAML for Git export
+serde_yaml = "0.9"
+
+# File dialog and filesystem for export/import
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+
+# Git sync
+git2 = "0.19"
+notify = { version = "6.1", default-features = false, features = ["macos_kqueue"] }
+
+# API Server - OpenAPI documentation
+utoipa = { version = "4", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "7", features = ["axum"] }

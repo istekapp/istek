@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Nuxt build output
+.nuxt/
+.output/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local env files
+.env
+.env.*
+!.env.example
+
+# Tauri
+src-tauri/target/
+
+# Testing
+coverage/

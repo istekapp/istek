@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package playground;
+
+// A simple greeting service for the Istek playground
+service Greeter {
+  // Send a greeting
+  rpc SayHello (HelloRequest) returns (HelloReply);
+  
+  // Stream greetings
+  rpc SayHelloServerStream (HelloRequest) returns (stream HelloReply);
+}
+
+// The request message containing the user's name
+message HelloRequest {
+  string name = 1;
+}
+
+// The response message containing the greeting
+message HelloReply {
+  string message = 1;
+  string timestamp = 2;
+}

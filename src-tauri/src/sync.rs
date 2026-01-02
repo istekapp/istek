@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::Manager;
 use git2::{Repository, Signature, StatusOptions, IndexAddOption};
 
@@ -209,7 +210,7 @@ fn convert_exported_folder_back(folder: &crate::git_export::ExportedFolder) -> s
 
 /// Helper function to fetch all collections from database for active workspace
 fn fetch_all_collections(app: &tauri::AppHandle) -> Result<Vec<serde_json::Value>, String> {
-    let db = app.state::<Database>();
+    let db = app.state::<Arc<Database>>();
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     
     // Get active workspace ID
@@ -354,7 +355,7 @@ Thumbs.db
 /// Get the current sync configuration
 #[tauri::command]
 pub async fn sync_get_config(app: tauri::AppHandle) -> Result<SyncConfig, String> {
-    let db = app.state::<Database>();
+    let db = app.state::<Arc<Database>>();
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     
     let config_json: Option<String> = conn
@@ -375,7 +376,7 @@ pub async fn sync_get_config(app: tauri::AppHandle) -> Result<SyncConfig, String
 /// Save the sync configuration
 #[tauri::command]
 pub async fn sync_save_config(app: tauri::AppHandle, config: SyncConfig) -> Result<(), String> {
-    let db = app.state::<Database>();
+    let db = app.state::<Arc<Database>>();
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     
     let config_json = serde_json::to_string(&config)
@@ -441,7 +442,7 @@ fn detect_local_changes(app: &tauri::AppHandle, config: &SyncConfig) -> Result<V
     
     // Get collections from database
     let collections: Vec<(String, String)> = {
-        let db = app.state::<Database>();
+        let db = app.state::<Arc<Database>>();
         let conn = db.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn.prepare("SELECT id, name FROM collections")
             .map_err(|e| e.to_string())?;
@@ -475,7 +476,7 @@ fn detect_local_changes(app: &tauri::AppHandle, config: &SyncConfig) -> Result<V
     // Check environments
     if config.sync_environments {
         let environments: Vec<(String, String, bool)> = {
-            let db = app.state::<Database>();
+            let db = app.state::<Arc<Database>>();
             let conn = db.conn.lock().map_err(|e| e.to_string())?;
             let mut stmt = conn.prepare("SELECT id, name, shareable FROM environments")
                 .map_err(|e| e.to_string())?;
@@ -516,7 +517,7 @@ fn detect_local_changes(app: &tauri::AppHandle, config: &SyncConfig) -> Result<V
         let global_vars_path = sync_path.join("global-variables.yaml");
         if !global_vars_path.exists() {
             let count: i32 = {
-                let db = app.state::<Database>();
+                let db = app.state::<Arc<Database>>();
                 let conn = db.conn.lock().map_err(|e| e.to_string())?;
                 conn.query_row(
                     "SELECT COUNT(*) FROM global_variables WHERE is_secret = 0",
@@ -551,7 +552,7 @@ fn detect_external_changes(app: &tauri::AppHandle, config: &SyncConfig) -> Resul
         if collections_path.exists() {
             // Get existing IDs
             let existing_ids: Vec<String> = {
-                let db = app.state::<Database>();
+                let db = app.state::<Arc<Database>>();
                 let conn = db.conn.lock().map_err(|e| e.to_string())?;
                 let mut stmt = conn.prepare("SELECT id FROM collections")
                     .map_err(|e| e.to_string())?;
@@ -597,7 +598,7 @@ fn detect_external_changes(app: &tauri::AppHandle, config: &SyncConfig) -> Resul
         if environments_path.exists() {
             // Get existing IDs
             let existing_ids: Vec<String> = {
-                let db = app.state::<Database>();
+                let db = app.state::<Arc<Database>>();
                 let conn = db.conn.lock().map_err(|e| e.to_string())?;
                 let mut stmt = conn.prepare("SELECT id FROM environments")
                     .map_err(|e| e.to_string())?;
@@ -729,7 +730,7 @@ pub async fn sync_export_environments(app: tauri::AppHandle) -> Result<Vec<Strin
     
     // Load shareable environments in a block
     let environments: Vec<Environment> = {
-        let db = app.state::<Database>();
+        let db = app.state::<Arc<Database>>();
         let conn = db.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn.prepare("SELECT id, name, color, variables, is_default, shareable, created_at FROM environments WHERE shareable = 1")
             .map_err(|e| e.to_string())?;
@@ -792,7 +793,7 @@ pub async fn sync_export_global_variables(app: tauri::AppHandle) -> Result<Strin
     
     // Load global variables in a block
     let variables: Vec<Variable> = {
-        let db = app.state::<Database>();
+        let db = app.state::<Arc<Database>>();
         let conn = db.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn.prepare("SELECT id, key, value, description, is_secret, enabled FROM global_variables")
             .map_err(|e| e.to_string())?;
@@ -892,7 +893,7 @@ pub async fn sync_import_collections(app: tauri::AppHandle) -> Result<Vec<String
             let collection = import_collection_yaml_sync(&content)?;
             
             // Save to database
-            let db = app.state::<Database>();
+            let db = app.state::<Arc<Database>>();
             let conn = db.conn.lock().map_err(|e| e.to_string())?;
             
             let id = collection.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -927,7 +928,7 @@ pub async fn sync_import_environments(app: tauri::AppHandle) -> Result<Vec<Strin
     
     // Get existing environment variables to preserve secret values
     let existing_secrets: HashMap<String, HashMap<String, String>> = {
-        let db = app.state::<Database>();
+        let db = app.state::<Arc<Database>>();
         let conn = db.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn.prepare("SELECT id, variables FROM environments")
             .map_err(|e| e.to_string())?;
@@ -975,7 +976,7 @@ pub async fn sync_import_environments(app: tauri::AppHandle) -> Result<Vec<Strin
             
             // Save to database
             {
-                let db = app.state::<Database>();
+                let db = app.state::<Arc<Database>>();
                 let conn = db.conn.lock().map_err(|e| e.to_string())?;
                 conn.execute(
                     "INSERT OR REPLACE INTO environments (id, name, color, variables, is_default, shareable, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1017,7 +1018,7 @@ pub async fn sync_import_global_variables(app: tauri::AppHandle) -> Result<i32, 
     
     // Get existing secret values
     let existing_secrets: HashMap<String, String> = {
-        let db = app.state::<Database>();
+        let db = app.state::<Arc<Database>>();
         let conn = db.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn.prepare("SELECT key, value FROM global_variables WHERE is_secret = 1")
             .map_err(|e| e.to_string())?;
@@ -1033,7 +1034,7 @@ pub async fn sync_import_global_variables(app: tauri::AppHandle) -> Result<i32, 
         let existing_value = existing_secrets.get(&exported_var.key).map(|s| s.as_str());
         let var = import_variable(exported_var, existing_value);
         
-        let db = app.state::<Database>();
+        let db = app.state::<Arc<Database>>();
         let conn = db.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
             "INSERT OR REPLACE INTO global_variables (id, key, value, description, is_secret, enabled) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",

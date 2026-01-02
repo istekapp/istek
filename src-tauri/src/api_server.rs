@@ -137,8 +137,6 @@ pub fn create_router(db: Arc<Database>) -> Router {
     Router::new()
         // Health
         .route("/api/health", get(health::health))
-        // OpenAPI spec
-        .route("/api/openapi.json", get(openapi_spec))
         // Workspaces
         .route("/api/workspaces", get(workspaces::list_workspaces).post(workspaces::create_workspace))
         .route("/api/workspaces/:workspace_id", get(workspaces::get_workspace).put(workspaces::update_workspace).delete(workspaces::delete_workspace))
@@ -165,15 +163,11 @@ pub fn create_router(db: Arc<Database>) -> Router {
         // History
         .route("/api/workspaces/:workspace_id/history", get(history::list_history).delete(history::clear_history))
         .route("/api/workspaces/:workspace_id/history/:history_id", get(history::get_history_item).delete(history::delete_history_item))
-        // Swagger UI
+        // Swagger UI (also serves /api/openapi.json)
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
         // State and middleware
         .with_state(db)
         .layer(cors)
-}
-
-async fn openapi_spec() -> impl axum::response::IntoResponse {
-    axum::Json(ApiDoc::openapi())
 }
 
 pub async fn start_server(db: Arc<Database>) {
@@ -181,17 +175,20 @@ pub async fn start_server(db: Arc<Database>) {
     
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], API_PORT));
     
-    // Start server silently (no logging)
+    // Start server
     let listener = match tokio::net::TcpListener::bind(addr).await {
-        Ok(l) => l,
-        Err(_) => {
-            // Port already in use or other error - silently fail
+        Ok(l) => {
+            eprintln!("Istek API server started on http://localhost:{}", API_PORT);
+            l
+        },
+        Err(e) => {
+            eprintln!("Failed to start API server on port {}: {}", API_PORT, e);
             return;
         }
     };
     
-    // Run the server in a background task
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    // Run the server
+    if let Err(e) = axum::serve(listener, router).await {
+        eprintln!("API server error: {}", e);
+    }
 }

@@ -154,9 +154,6 @@ const copyApiUrl = async (url: string, key: string) => {
 }
 
 const apiEndpoints = computed(() => [
-  { key: 'base', name: 'API Base URL', url: `${API_BASE_URL}/api`, icon: 'lucide:server', color: 'text-blue-500', bgColor: 'bg-blue-500/10', description: 'Base URL for all API endpoints' },
-  { key: 'health', name: 'Health Check', url: `${API_BASE_URL}/api/health`, icon: 'lucide:heart-pulse', color: 'text-green-500', bgColor: 'bg-green-500/10', description: 'Check if API is running' },
-  { key: 'openapi', name: 'OpenAPI Spec', url: `${API_BASE_URL}/api/openapi.json`, icon: 'lucide:file-json', color: 'text-cyan-500', bgColor: 'bg-cyan-500/10', description: 'OpenAPI 3.0 specification' },
   { key: 'swagger', name: 'Swagger UI', url: `${API_BASE_URL}/api/docs`, icon: 'lucide:book-open', color: 'text-orange-500', bgColor: 'bg-orange-500/10', description: 'Interactive API documentation' },
 ])
 
@@ -1736,19 +1733,6 @@ watch(variableTestResults, (results) => {
               </div>
             </div>
 
-            <!-- Quick Reference -->
-            <div class="space-y-4">
-              <h4 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Quick Reference</h4>
-              
-              <div class="bg-muted/30 rounded-lg p-4 font-mono text-sm space-y-2">
-                <div class="text-muted-foreground"># List all workspaces</div>
-                <div class="text-foreground">curl {{ API_BASE_URL }}/api/workspaces</div>
-                <div class="text-muted-foreground mt-4"># List collections in a workspace</div>
-                <div class="text-foreground">curl {{ API_BASE_URL }}/api/workspaces/:id/collections</div>
-                <div class="text-muted-foreground mt-4"># View Swagger documentation</div>
-                <div class="text-foreground">open {{ API_BASE_URL }}/api/docs</div>
-              </div>
-            </div>
           </div>
         </div>
 

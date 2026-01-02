@@ -45,10 +45,6 @@ hyper = { version = "1.4", features = ["client", "server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "server", "http1", "http2", "tokio"] }
 http-body-util = "0.1"
 
-# Unix Socket - only on Unix-like systems (not Windows)
-[target.'cfg(unix)'.dependencies]
-hyperlocal = "0.9"
-
 # gRPC
 tonic = "0.12"
 prost = "0.13"
@@ -122,3 +118,7 @@ notify = { version = "6.1", default-features = false, features = ["macos_kqueue"
 # API Server - OpenAPI documentation
 utoipa = { version = "4", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "7", features = ["axum"] }
+
+# Unix Socket - only on Unix-like systems (not Windows)
+[target.'cfg(unix)'.dependencies]
+hyperlocal = "0.9"

@@ -1,9 +1,10 @@
+use std::sync::Arc;
+
 #[cfg(unix)]
 use {
     hyper::server::conn::http1,
     hyper_util::rt::TokioIo,
     hyper_util::service::TowerToHyperService,
-    std::sync::Arc,
     tokio::net::UnixListener,
     tokio::sync::oneshot,
 };

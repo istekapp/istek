@@ -129,29 +129,59 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 40
-    # Skip this job if platform/arch doesn't match the workflow_dispatch inputs
-    if: |
-      github.event_name == 'push' ||
-      (
-        (inputs.platform == 'all' || inputs.platform == matrix.os_name) &&
-        (matrix.os_name != 'macos' || inputs.arch == 'all' || inputs.arch == matrix.arch)
-      )
     steps:
+      # Skip this job if platform/arch doesn't match the workflow_dispatch inputs
+      - name: Check if should run
+        id: should_run
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            echo "run=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          PLATFORM="${{ inputs.platform }}"
+          ARCH="${{ inputs.arch }}"
+          OS_NAME="${{ matrix.os_name }}"
+          MATRIX_ARCH="${{ matrix.arch }}"
+          
+          if [ "$PLATFORM" != "all" ] && [ "$PLATFORM" != "$OS_NAME" ]; then
+            echo "Skipping: platform $OS_NAME not selected (selected: $PLATFORM)"
+            echo "run=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if [ "$OS_NAME" == "macos" ] && [ "$ARCH" != "all" ] && [ "$ARCH" != "$MATRIX_ARCH" ]; then
+            echo "Skipping: arch $MATRIX_ARCH not selected (selected: $ARCH)"
+            echo "run=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "run=true" >> $GITHUB_OUTPUT
+      
+      - name: Skip notification
+        if: steps.should_run.outputs.run == 'false'
+        run: echo "This build configuration was skipped based on workflow inputs"
+
       - name: Checkout
+        if: steps.should_run.outputs.run == 'true'
         uses: actions/checkout@v4
 
       - name: Setup Node.js
+        if: steps.should_run.outputs.run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
 
       - name: Setup Rust
+        if: steps.should_run.outputs.run == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.targets }}
 
       - name: Rust cache
+        if: steps.should_run.outputs.run == 'true'
         uses: swatinem/rust-cache@v2
         with:
           workspaces: 'src-tauri'
@@ -160,7 +190,7 @@ jobs:
 
       # Linux dependencies
       - name: Install Linux dependencies
-        if: matrix.os_name == 'linux'
+        if: steps.should_run.outputs.run == 'true' && matrix.os_name == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -173,22 +203,27 @@ jobs:
 
       # Install protobuf using arduino/setup-protoc (works on all platforms)
       - name: Install Protoc
+        if: steps.should_run.outputs.run == 'true'
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install frontend dependencies
+        if: steps.should_run.outputs.run == 'true'
         run: npm ci
 
       - name: Build frontend
+        if: steps.should_run.outputs.run == 'true'
         run: npm run build
 
       # Remove stale gen/schemas to force regeneration with correct plugin permissions
       - name: Clean generated schemas
+        if: steps.should_run.outputs.run == 'true'
         run: rm -rf src-tauri/gen/schemas
         shell: bash
 
       - name: Build Tauri app
+        if: steps.should_run.outputs.run == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

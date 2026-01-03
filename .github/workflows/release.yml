@@ -94,13 +94,12 @@ jobs:
         with:
           targets: ${{ matrix.targets }}
 
-      # Temporarily disabled caching to force fresh build
-      # - name: Rust cache
-      #   uses: swatinem/rust-cache@v2
-      #   with:
-      #     workspaces: 'src-tauri'
-      #     shared-key: ci
-      #     cache-on-failure: true
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri'
+          shared-key: ${{ matrix.os_name }}-${{ matrix.targets || 'default' }}
+          cache-on-failure: true
 
       # Linux dependencies
       - name: Install Linux dependencies

@@ -7,9 +7,38 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., v1.0.0)'
+        description: 'Version to release (e.g., 1.0.0)'
         required: true
         type: string
+      platform:
+        description: 'Platform to build'
+        required: false
+        type: choice
+        default: 'all'
+        options:
+          - all
+          - macos
+          - windows
+          - linux
+      arch:
+        description: 'Architecture (macOS only)'
+        required: false
+        type: choice
+        default: 'all'
+        options:
+          - all
+          - aarch64
+          - x64
+      skip_release_creation:
+        description: 'Skip creating a new release (use existing)'
+        required: false
+        type: boolean
+        default: false
+      publish:
+        description: 'Publish release after build (set to false for draft only)'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -22,8 +51,8 @@ jobs:
   create-release:
     runs-on: ubuntu-22.04
     outputs:
-      release_id: ${{ steps.create_release.outputs.id }}
-      release_upload_url: ${{ steps.create_release.outputs.upload_url }}
+      release_id: ${{ steps.create_release.outputs.id || steps.get_release.outputs.id }}
+      release_upload_url: ${{ steps.create_release.outputs.upload_url || steps.get_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
     steps:
       - name: Checkout
@@ -38,8 +67,25 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Get existing release
+        id: get_release
+        if: github.event.inputs.skip_release_creation == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE=$(gh release view ${{ steps.get_version.outputs.version }} --json id,uploadUrl --jq '{id: .id, upload_url: .uploadUrl}' 2>/dev/null || echo '{}')
+          if [ "$RELEASE" != "{}" ]; then
+            echo "id=$(echo $RELEASE | jq -r '.id')" >> $GITHUB_OUTPUT
+            echo "upload_url=$(echo $RELEASE | jq -r '.upload_url')" >> $GITHUB_OUTPUT
+            echo "Found existing release: ${{ steps.get_version.outputs.version }}"
+          else
+            echo "::error::Release ${{ steps.get_version.outputs.version }} not found"
+            exit 1
+          fi
+
       - name: Create Release
         id: create_release
+        if: github.event.inputs.skip_release_creation != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.version }}
@@ -55,29 +101,40 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
+        settings:
           # macOS Apple Silicon (ARM64)
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
             targets: 'aarch64-apple-darwin'
             os_name: macos
+            arch: aarch64
           # macOS Intel (x64)
           - platform: macos-latest
             args: '--target x86_64-apple-darwin'
             targets: 'x86_64-apple-darwin'
             os_name: macos
+            arch: x64
           # Windows x64
           - platform: windows-latest
             args: ''
             targets: ''
             os_name: windows
+            arch: x64
           # Linux x64
           - platform: ubuntu-22.04
             args: ''
             targets: ''
             os_name: linux
+            arch: x64
 
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ matrix.settings.platform }}
+    # Filter based on workflow_dispatch inputs
+    if: |
+      github.event_name == 'push' ||
+      (
+        (github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.settings.os_name) &&
+        (matrix.settings.os_name != 'macos' || github.event.inputs.arch == 'all' || github.event.inputs.arch == matrix.settings.arch)
+      )
     timeout-minutes: 40
     steps:
       - name: Checkout
@@ -92,18 +149,18 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.targets }}
+          targets: ${{ matrix.settings.targets }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: 'src-tauri'
-          shared-key: ${{ matrix.os_name }}-${{ matrix.targets || 'default' }}
+          shared-key: ${{ matrix.settings.os_name }}-${{ matrix.settings.targets || 'default' }}
           cache-on-failure: true
 
       # Linux dependencies
       - name: Install Linux dependencies
-        if: matrix.os_name == 'linux'
+        if: matrix.settings.os_name == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -141,24 +198,26 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           
           # Apple code signing (macOS only)
-          APPLE_CERTIFICATE: ${{ matrix.os_name == 'macos' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ matrix.os_name == 'macos' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_ID: ${{ matrix.os_name == 'macos' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ matrix.os_name == 'macos' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ matrix.os_name == 'macos' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_TEAM_ID: ${{ matrix.os_name == 'macos' && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_CERTIFICATE: ${{ matrix.settings.os_name == 'macos' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ matrix.settings.os_name == 'macos' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.settings.os_name == 'macos' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ matrix.settings.os_name == 'macos' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.settings.os_name == 'macos' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_TEAM_ID: ${{ matrix.settings.os_name == 'macos' && secrets.APPLE_TEAM_ID || '' }}
           
           # Azure code signing for Windows (EV certificate via Azure Key Vault)
-          AZURE_CLIENT_ID: ${{ matrix.os_name == 'windows' && secrets.AZURE_CLIENT_ID || '' }}
-          AZURE_CLIENT_SECRET: ${{ matrix.os_name == 'windows' && secrets.AZURE_CLIENT_SECRET || '' }}
-          AZURE_TENANT_ID: ${{ matrix.os_name == 'windows' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ matrix.settings.os_name == 'windows' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ matrix.settings.os_name == 'windows' && secrets.AZURE_CLIENT_SECRET || '' }}
+          AZURE_TENANT_ID: ${{ matrix.settings.os_name == 'windows' && secrets.AZURE_TENANT_ID || '' }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: ${{ matrix.args }}
+          args: ${{ matrix.settings.args }}
 
   publish-release:
     needs: [create-release, build-tauri]
     runs-on: ubuntu-22.04
+    # Only publish if publish input is true (default) or on tag push
+    if: github.event_name == 'push' || github.event.inputs.publish == 'true'
     steps:
       - name: Publish Release
         uses: softprops/action-gh-release@v2

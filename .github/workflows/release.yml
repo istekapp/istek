@@ -135,8 +135,23 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+          # Tauri updater signing
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          
+          # Apple code signing (macOS only)
+          APPLE_CERTIFICATE: ${{ matrix.os_name == 'macos' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ matrix.os_name == 'macos' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.os_name == 'macos' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ matrix.os_name == 'macos' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.os_name == 'macos' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_TEAM_ID: ${{ matrix.os_name == 'macos' && secrets.APPLE_TEAM_ID || '' }}
+          
+          # Azure code signing for Windows (EV certificate via Azure Key Vault)
+          AZURE_CLIENT_ID: ${{ matrix.os_name == 'windows' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ matrix.os_name == 'windows' && secrets.AZURE_CLIENT_SECRET || '' }}
+          AZURE_TENANT_ID: ${{ matrix.os_name == 'windows' && secrets.AZURE_TENANT_ID || '' }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}

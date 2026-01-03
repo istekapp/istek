@@ -10,14 +10,7 @@
   },
   "plugins": {
     "shell": {
-      "open": true,
-      "scope": [
-        {
-          "name": "run-mcp",
-          "cmd": "",
-          "args": true
-        }
-      ]
+      "open": true
     }
   },
   "app": {

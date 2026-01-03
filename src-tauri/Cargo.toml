@@ -112,7 +112,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 
 # Git sync
-git2 = "0.19"
+git2 = { version = "0.19", features = ["vendored-openssl"] }
 notify = { version = "6.1", default-features = false, features = ["macos_kqueue"] }
 
 # API Server - OpenAPI documentation

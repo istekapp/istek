@@ -101,7 +101,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        settings:
+        include:
           # macOS Apple Silicon (ARM64)
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
@@ -127,15 +127,15 @@ jobs:
             os_name: linux
             arch: x64
 
-    runs-on: ${{ matrix.settings.platform }}
-    # Filter based on workflow_dispatch inputs
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 40
+    # Skip this job if platform/arch doesn't match the workflow_dispatch inputs
     if: |
       github.event_name == 'push' ||
       (
-        (github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.settings.os_name) &&
-        (matrix.settings.os_name != 'macos' || github.event.inputs.arch == 'all' || github.event.inputs.arch == matrix.settings.arch)
+        (inputs.platform == 'all' || inputs.platform == matrix.os_name) &&
+        (matrix.os_name != 'macos' || inputs.arch == 'all' || inputs.arch == matrix.arch)
       )
-    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -149,18 +149,18 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.settings.targets }}
+          targets: ${{ matrix.targets }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: 'src-tauri'
-          shared-key: ${{ matrix.settings.os_name }}-${{ matrix.settings.targets || 'default' }}
+          shared-key: ${{ matrix.os_name }}-${{ matrix.targets || 'default' }}
           cache-on-failure: true
 
       # Linux dependencies
       - name: Install Linux dependencies
-        if: matrix.settings.os_name == 'linux'
+        if: matrix.os_name == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -198,26 +198,26 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           
           # Apple code signing (macOS only)
-          APPLE_CERTIFICATE: ${{ matrix.settings.os_name == 'macos' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ matrix.settings.os_name == 'macos' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_ID: ${{ matrix.settings.os_name == 'macos' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ matrix.settings.os_name == 'macos' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ matrix.settings.os_name == 'macos' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_TEAM_ID: ${{ matrix.settings.os_name == 'macos' && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_CERTIFICATE: ${{ matrix.os_name == 'macos' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ matrix.os_name == 'macos' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.os_name == 'macos' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ matrix.os_name == 'macos' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.os_name == 'macos' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_TEAM_ID: ${{ matrix.os_name == 'macos' && secrets.APPLE_TEAM_ID || '' }}
           
           # Azure code signing for Windows (EV certificate via Azure Key Vault)
-          AZURE_CLIENT_ID: ${{ matrix.settings.os_name == 'windows' && secrets.AZURE_CLIENT_ID || '' }}
-          AZURE_CLIENT_SECRET: ${{ matrix.settings.os_name == 'windows' && secrets.AZURE_CLIENT_SECRET || '' }}
-          AZURE_TENANT_ID: ${{ matrix.settings.os_name == 'windows' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ matrix.os_name == 'windows' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ matrix.os_name == 'windows' && secrets.AZURE_CLIENT_SECRET || '' }}
+          AZURE_TENANT_ID: ${{ matrix.os_name == 'windows' && secrets.AZURE_TENANT_ID || '' }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: ${{ matrix.settings.args }}
+          args: ${{ matrix.args }}
 
   publish-release:
     needs: [create-release, build-tauri]
     runs-on: ubuntu-22.04
     # Only publish if publish input is true (default) or on tag push
-    if: github.event_name == 'push' || github.event.inputs.publish == 'true'
+    if: github.event_name == 'push' || inputs.publish == true
     steps:
       - name: Publish Release
         uses: softprops/action-gh-release@v2

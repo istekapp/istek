@@ -4,7 +4,8 @@ mod mqtt;
 mod graphql;
 mod unix_socket;
 mod sse;
-mod database;
+mod storage;
+mod storage_commands;
 mod import;
 mod mcp;
 mod mock_server;
@@ -37,25 +38,21 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            // Initialize database
-            let app_data_dir = app.path().app_data_dir()
-                .expect("Failed to get app data directory");
-            
-            let db = database::Database::new(app_data_dir)
-                .expect("Failed to initialize database");
+            // Initialize YAML-based storage
+            let storage = storage::Storage::new()
+                .expect("Failed to initialize storage");
             
             // Wrap in Arc for sharing between Tauri and API server
-            let db_arc = Arc::new(db);
+            let storage_arc = Arc::new(storage);
             
             // Start the internal REST API server (port 47835)
-            let db_for_api = db_arc.clone();
+            let storage_for_api = storage_arc.clone();
             tauri::async_runtime::spawn(async move {
-                api_server::start_server(db_for_api).await;
+                api_server::start_server(storage_for_api).await;
             });
             
-            // Manage the Arc<Database> - Tauri commands will need to be updated
-            // to use State<Arc<Database>> instead of State<Database>
-            app.manage(db_arc);
+            // Manage the Arc<Storage>
+            app.manage(storage_arc);
             
             Ok(())
         })
@@ -82,46 +79,49 @@ pub fn run() {
             // SSE
             sse::sse_connect,
             sse::sse_disconnect,
-            // Database - Load
-            database::load_app_data,
-            // Database - Workspaces
-            database::create_workspace,
-            database::update_workspace,
-            database::delete_workspace,
-            database::set_active_workspace,
-            database::get_workspace,
-            database::get_default_sync_path,
-            database::load_workspace_data,
-            // Database - Collections
-            database::save_collection,
-            database::delete_collection,
-            // Database - History
-            database::save_history_item,
-            database::clear_history,
-            database::delete_history_item,
-            // Database - Global Variables
-            database::save_global_variable,
-            database::delete_global_variable,
-            database::save_all_global_variables,
-            // Database - Environments
-            database::save_environment,
-            database::delete_environment,
-            database::save_all_environments,
-            // Database - Secret Providers
-            database::save_secret_provider,
-            database::delete_secret_provider,
-            // Database - MCP Servers
-            database::get_mcp_servers,
-            database::add_mcp_server,
-            database::update_mcp_server,
-            database::delete_mcp_server,
-            // Database - Settings
-            database::save_active_environment_id,
-            // Database - Test Runs
-            database::save_test_run,
-            database::load_test_runs,
-            database::delete_test_run,
-            database::clear_test_runs,
+            // Storage - Load
+            storage_commands::load_app_data,
+            storage_commands::load_workspace_data,
+            // Storage - Workspaces
+            storage_commands::create_workspace,
+            storage_commands::update_workspace,
+            storage_commands::delete_workspace,
+            storage_commands::set_active_workspace,
+            storage_commands::get_workspace,
+            storage_commands::get_default_sync_path,
+            // Storage - Collections
+            storage_commands::save_collection,
+            storage_commands::delete_collection,
+            // Storage - History
+            storage_commands::save_history_item,
+            storage_commands::clear_history,
+            storage_commands::delete_history_item,
+            // Storage - Global Variables
+            storage_commands::save_global_variable,
+            storage_commands::delete_global_variable,
+            storage_commands::save_all_global_variables,
+            // Storage - Environments
+            storage_commands::save_environment,
+            storage_commands::delete_environment,
+            storage_commands::save_all_environments,
+            // Storage - Secret Providers
+            storage_commands::save_secret_provider,
+            storage_commands::delete_secret_provider,
+            // Storage - MCP Servers
+            storage_commands::get_mcp_servers,
+            storage_commands::add_mcp_server,
+            storage_commands::update_mcp_server,
+            storage_commands::delete_mcp_server,
+            storage_commands::toggle_mcp_server,
+            // Storage - Settings
+            storage_commands::save_active_environment_id,
+            // Storage - Test Runs
+            storage_commands::save_test_run,
+            storage_commands::load_test_runs,
+            storage_commands::delete_test_run,
+            storage_commands::clear_test_runs,
+            // Storage - Utility
+            storage_commands::get_config_dir,
             // Import
             import::import_openapi,
             import::import_postman,
@@ -221,9 +221,6 @@ pub fn run() {
             sync::git_switch_branch,
             sync::git_get_commit_files,
             sync::git_get_file_diff,
-            // Environment Shareable
-            database::set_environment_shareable,
-            database::get_shareable_environments,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

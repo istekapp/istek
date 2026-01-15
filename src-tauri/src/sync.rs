@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tauri::Manager;
 use git2::{Repository, Signature, StatusOptions, IndexAddOption};
 
-use crate::database::{Database, Environment, Variable};
+use crate::storage::{Storage, Environment, Variable, Collection};
 use crate::git_export::{export_collection_yaml, ExportedCollection};
 
 // ============ Types ============
@@ -208,70 +208,31 @@ fn convert_exported_folder_back(folder: &crate::git_export::ExportedFolder) -> s
     result
 }
 
-/// Helper function to fetch all collections from database for active workspace
+/// Helper function to fetch all collections from storage for active workspace
 fn fetch_all_collections(app: &tauri::AppHandle) -> Result<Vec<serde_json::Value>, String> {
-    let db = app.state::<Arc<Database>>();
-    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    let storage = app.state::<Arc<Storage>>();
     
     // Get active workspace ID
-    let workspace_id: Option<String> = conn
-        .query_row(
-            "SELECT value FROM app_settings WHERE key = 'active_workspace_id'",
-            [],
-            |row| row.get(0),
-        )
-        .ok();
+    let workspace_id = storage.get_active_workspace_id()?;
     
-    let mut collections: Vec<serde_json::Value> = Vec::new();
+    let mut result: Vec<serde_json::Value> = Vec::new();
     
     if let Some(ws_id) = workspace_id {
-        let mut stmt = conn.prepare("SELECT id, name, requests, folders, settings, created_at FROM collections WHERE workspace_id = ?1")
-            .map_err(|e| e.to_string())?;
-        
-        let rows = stmt.query_map(rusqlite::params![ws_id], |row| {
-            let folders_str: Option<String> = row.get(3)?;
-            let settings_str: Option<String> = row.get(4)?;
-            Ok(serde_json::json!({
-                "id": row.get::<_, String>(0)?,
-                "name": row.get::<_, String>(1)?,
-                "requests": serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(2)?).unwrap_or(serde_json::json!([])),
-                "folders": folders_str.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
-                "settings": settings_str.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
-                "createdAt": row.get::<_, i64>(5)?,
-            }))
-        }).map_err(|e| e.to_string())?;
-        
-        for row in rows {
-            if let Ok(collection) = row {
-                collections.push(collection);
-            }
-        }
-    } else {
-        // Fallback: get all collections if no active workspace
-        let mut stmt = conn.prepare("SELECT id, name, requests, folders, settings, created_at FROM collections")
-            .map_err(|e| e.to_string())?;
-        
-        let rows = stmt.query_map([], |row| {
-            let folders_str: Option<String> = row.get(3)?;
-            let settings_str: Option<String> = row.get(4)?;
-            Ok(serde_json::json!({
-                "id": row.get::<_, String>(0)?,
-                "name": row.get::<_, String>(1)?,
-                "requests": serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(2)?).unwrap_or(serde_json::json!([])),
-                "folders": folders_str.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
-                "settings": settings_str.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
-                "createdAt": row.get::<_, i64>(5)?,
-            }))
-        }).map_err(|e| e.to_string())?;
-        
-        for row in rows {
-            if let Ok(collection) = row {
-                collections.push(collection);
-            }
+        let collections = storage.get_collections(&ws_id)?;
+        for collection in collections {
+            result.push(serde_json::json!({
+                "id": collection.id,
+                "name": collection.name,
+                "requests": collection.requests,
+                "folders": collection.folders,
+                "settings": collection.settings,
+                "protocolType": collection.protocol_type,
+                "createdAt": collection.created_at,
+            }));
         }
     }
     
-    Ok(collections)
+    Ok(result)
 }
 
 fn export_variable(var: &Variable) -> ExportedVariable {
@@ -298,7 +259,7 @@ fn import_variable(exported: &ExportedVariable, existing_value: Option<&str>) ->
         },
         description: exported.description.clone(),
         is_secret: exported.is_secret,
-        secret_provider: None,
+        secret_provider: None, // serde_json::Value compatible
         enabled: exported.enabled,
     }
 }
@@ -355,16 +316,9 @@ Thumbs.db
 /// Get the current sync configuration
 #[tauri::command]
 pub async fn sync_get_config(app: tauri::AppHandle) -> Result<SyncConfig, String> {
-    let db = app.state::<Arc<Database>>();
-    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    let storage = app.state::<Arc<Storage>>();
     
-    let config_json: Option<String> = conn
-        .query_row(
-            "SELECT value FROM app_settings WHERE key = 'sync_config'",
-            [],
-            |row| row.get(0),
-        )
-        .ok();
+    let config_json = storage.get_setting("sync_config")?;
     
     match config_json {
         Some(json) => serde_json::from_str(&json)
@@ -376,16 +330,12 @@ pub async fn sync_get_config(app: tauri::AppHandle) -> Result<SyncConfig, String
 /// Save the sync configuration
 #[tauri::command]
 pub async fn sync_save_config(app: tauri::AppHandle, config: SyncConfig) -> Result<(), String> {
-    let db = app.state::<Arc<Database>>();
-    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    let storage = app.state::<Arc<Storage>>();
     
     let config_json = serde_json::to_string(&config)
         .map_err(|e| format!("Failed to serialize sync config: {}", e))?;
     
-    conn.execute(
-        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('sync_config', ?1)",
-        [&config_json],
-    ).map_err(|e| format!("Failed to save sync config: {}", e))?;
+    storage.save_setting("sync_config", &config_json)?;
     
     Ok(())
 }
@@ -435,77 +385,54 @@ pub async fn sync_get_status(app: tauri::AppHandle) -> Result<SyncStatus, String
 fn detect_local_changes(app: &tauri::AppHandle, config: &SyncConfig) -> Result<Vec<SyncChange>, String> {
     let mut changes = Vec::new();
     let sync_path = get_sync_path(config);
+    let storage = app.state::<Arc<Storage>>();
+    
+    // Get active workspace ID
+    let workspace_id = match storage.get_active_workspace_id()? {
+        Some(id) => id,
+        None => return Ok(changes),
+    };
     
     if !config.sync_collections {
         return Ok(changes);
     }
     
-    // Get collections from database
-    let collections: Vec<(String, String)> = {
-        let db = app.state::<Arc<Database>>();
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn.prepare("SELECT id, name FROM collections")
-            .map_err(|e| e.to_string())?;
-        let result: Vec<(String, String)> = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        result
-    };
+    // Get collections from storage
+    let collections = storage.get_collections(&workspace_id)?;
     
     let collections_path = sync_path.join("collections");
     
-    for (id, name) in collections {
-        let safe_name = sanitize_filename(&name);
+    for collection in &collections {
+        let safe_name = sanitize_filename(&collection.name);
         let file_path = collections_path.join(format!("{}.yaml", safe_name));
         
         if !file_path.exists() {
             changes.push(SyncChange {
                 change_type: "added".to_string(),
                 resource_type: "collection".to_string(),
-                resource_id: id,
-                resource_name: name,
+                resource_id: collection.id.clone(),
+                resource_name: collection.name.clone(),
                 source: "local".to_string(),
             });
-        } else {
-            // TODO: Compare file content with database content to detect modifications
-            // For now, we'll mark as potentially modified
         }
     }
     
-    // Check environments
+    // Check environments (all environments are shareable in YAML storage)
     if config.sync_environments {
-        let environments: Vec<(String, String, bool)> = {
-            let db = app.state::<Arc<Database>>();
-            let conn = db.conn.lock().map_err(|e| e.to_string())?;
-            let mut stmt = conn.prepare("SELECT id, name, shareable FROM environments")
-                .map_err(|e| e.to_string())?;
-            let result: Vec<(String, String, bool)> = stmt.query_map([], |row| {
-                    let shareable: i32 = row.get::<_, Option<i32>>(2)?.unwrap_or(0);
-                    Ok((row.get(0)?, row.get(1)?, shareable != 0))
-                })
-                .map_err(|e| e.to_string())?
-                .filter_map(|r| r.ok())
-                .collect();
-            result
-        };
+        let environments = storage.get_environments(&workspace_id)?;
         
         let environments_path = sync_path.join("environments");
         
-        for (id, name, shareable) in environments {
-            if !shareable {
-                continue; // Skip non-shareable environments
-            }
-            
-            let safe_name = sanitize_filename(&name);
+        for env in &environments {
+            let safe_name = sanitize_filename(&env.name);
             let file_path = environments_path.join(format!("{}.yaml", safe_name));
             
             if !file_path.exists() {
                 changes.push(SyncChange {
                     change_type: "added".to_string(),
                     resource_type: "environment".to_string(),
-                    resource_id: id,
-                    resource_name: name,
+                    resource_id: env.id.clone(),
+                    resource_name: env.name.clone(),
                     source: "local".to_string(),
                 });
             }
@@ -516,17 +443,10 @@ fn detect_local_changes(app: &tauri::AppHandle, config: &SyncConfig) -> Result<V
     if config.sync_global_variables {
         let global_vars_path = sync_path.join("global-variables.yaml");
         if !global_vars_path.exists() {
-            let count: i32 = {
-                let db = app.state::<Arc<Database>>();
-                let conn = db.conn.lock().map_err(|e| e.to_string())?;
-                conn.query_row(
-                    "SELECT COUNT(*) FROM global_variables WHERE is_secret = 0",
-                    [],
-                    |row| row.get(0),
-                ).unwrap_or(0)
-            };
+            let variables = storage.get_global_variables(&workspace_id)?;
+            let non_secret_count = variables.iter().filter(|v| !v.is_secret).count();
             
-            if count > 0 {
+            if non_secret_count > 0 {
                 changes.push(SyncChange {
                     change_type: "added".to_string(),
                     resource_type: "global_variable".to_string(),
@@ -545,23 +465,21 @@ fn detect_local_changes(app: &tauri::AppHandle, config: &SyncConfig) -> Result<V
 fn detect_external_changes(app: &tauri::AppHandle, config: &SyncConfig) -> Result<Vec<SyncChange>, String> {
     let mut changes = Vec::new();
     let sync_path = get_sync_path(config);
+    let storage = app.state::<Arc<Storage>>();
+    
+    // Get active workspace ID
+    let workspace_id = match storage.get_active_workspace_id()? {
+        Some(id) => id,
+        None => return Ok(changes),
+    };
     
     // Check for new collection files
     if config.sync_collections {
         let collections_path = sync_path.join("collections");
         if collections_path.exists() {
-            // Get existing IDs
-            let existing_ids: Vec<String> = {
-                let db = app.state::<Arc<Database>>();
-                let conn = db.conn.lock().map_err(|e| e.to_string())?;
-                let mut stmt = conn.prepare("SELECT id FROM collections")
-                    .map_err(|e| e.to_string())?;
-                let result: Vec<String> = stmt.query_map([], |row| row.get(0))
-                    .map_err(|e| e.to_string())?
-                    .filter_map(|r| r.ok())
-                    .collect();
-                result
-            };
+            // Get existing IDs from storage
+            let collections = storage.get_collections(&workspace_id)?;
+            let existing_ids: Vec<String> = collections.iter().map(|c| c.id.clone()).collect();
             
             // Check files
             if let Ok(entries) = fs::read_dir(&collections_path) {
@@ -596,18 +514,9 @@ fn detect_external_changes(app: &tauri::AppHandle, config: &SyncConfig) -> Resul
     if config.sync_environments {
         let environments_path = sync_path.join("environments");
         if environments_path.exists() {
-            // Get existing IDs
-            let existing_ids: Vec<String> = {
-                let db = app.state::<Arc<Database>>();
-                let conn = db.conn.lock().map_err(|e| e.to_string())?;
-                let mut stmt = conn.prepare("SELECT id FROM environments")
-                    .map_err(|e| e.to_string())?;
-                let result: Vec<String> = stmt.query_map([], |row| row.get(0))
-                    .map_err(|e| e.to_string())?
-                    .filter_map(|r| r.ok())
-                    .collect();
-                result
-            };
+            // Get existing IDs from storage
+            let environments = storage.get_environments(&workspace_id)?;
+            let existing_ids: Vec<String> = environments.iter().map(|e| e.id.clone()).collect();
             
             // Check files
             if let Ok(entries) = fs::read_dir(&environments_path) {
@@ -724,34 +633,17 @@ pub async fn sync_export_environments(app: tauri::AppHandle) -> Result<Vec<Strin
     let config = sync_get_config(app.clone()).await?;
     let sync_path = get_sync_path(&config);
     let environments_path = sync_path.join("environments");
+    let storage = app.state::<Arc<Storage>>();
     
     fs::create_dir_all(&environments_path)
         .map_err(|e| format!("Failed to create environments directory: {}", e))?;
     
-    // Load shareable environments in a block
-    let environments: Vec<Environment> = {
-        let db = app.state::<Arc<Database>>();
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn.prepare("SELECT id, name, color, variables, is_default, shareable, created_at FROM environments WHERE shareable = 1")
-            .map_err(|e| e.to_string())?;
-        let result: Vec<Environment> = stmt
-            .query_map([], |row| {
-                let variables_str: String = row.get(3)?;
-                let variables: Vec<Variable> = serde_json::from_str(&variables_str).unwrap_or_default();
-                Ok(Environment {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    color: row.get(2)?,
-                    variables,
-                    is_default: row.get::<_, Option<i32>>(4)?.map(|v| v != 0),
-                    created_at: row.get(6)?,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        result
-    };
+    // Get active workspace ID
+    let workspace_id = storage.get_active_workspace_id()?
+        .ok_or_else(|| "No active workspace".to_string())?;
+    
+    // Load environments from storage
+    let environments = storage.get_environments(&workspace_id)?;
     
     let mut exported_files = Vec::new();
     
@@ -790,30 +682,14 @@ pub async fn sync_export_environments(app: tauri::AppHandle) -> Result<Vec<Strin
 pub async fn sync_export_global_variables(app: tauri::AppHandle) -> Result<String, String> {
     let config = sync_get_config(app.clone()).await?;
     let sync_path = get_sync_path(&config);
+    let storage = app.state::<Arc<Storage>>();
     
-    // Load global variables in a block
-    let variables: Vec<Variable> = {
-        let db = app.state::<Arc<Database>>();
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn.prepare("SELECT id, key, value, description, is_secret, enabled FROM global_variables")
-            .map_err(|e| e.to_string())?;
-        let result: Vec<Variable> = stmt
-            .query_map([], |row| {
-                Ok(Variable {
-                    id: row.get(0)?,
-                    key: row.get(1)?,
-                    value: row.get(2)?,
-                    description: row.get(3)?,
-                    is_secret: row.get::<_, i32>(4)? != 0,
-                    secret_provider: None,
-                    enabled: row.get::<_, i32>(5)? != 0,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        result
-    };
+    // Get active workspace ID
+    let workspace_id = storage.get_active_workspace_id()?
+        .ok_or_else(|| "No active workspace".to_string())?;
+    
+    // Load global variables from storage
+    let variables = storage.get_global_variables(&workspace_id)?;
     
     let exported_vars: Vec<ExportedVariable> = variables.iter()
         .map(|v| export_variable(v))
@@ -874,10 +750,15 @@ pub async fn sync_import_collections(app: tauri::AppHandle) -> Result<Vec<String
     let config = sync_get_config(app.clone()).await?;
     let sync_path = get_sync_path(&config);
     let collections_path = sync_path.join("collections");
+    let storage = app.state::<Arc<Storage>>();
     
     if !collections_path.exists() {
         return Ok(vec![]);
     }
+    
+    // Get active workspace ID
+    let workspace_id = storage.get_active_workspace_id()?
+        .ok_or_else(|| "No active workspace".to_string())?;
     
     let mut imported = Vec::new();
     
@@ -890,25 +771,23 @@ pub async fn sync_import_collections(app: tauri::AppHandle) -> Result<Vec<String
             let content = fs::read_to_string(&path)
                 .map_err(|e| format!("Failed to read file {:?}: {}", path, e))?;
             
-            let collection = import_collection_yaml_sync(&content)?;
+            let collection_json = import_collection_yaml_sync(&content)?;
             
-            // Save to database
-            let db = app.state::<Arc<Database>>();
-            let conn = db.conn.lock().map_err(|e| e.to_string())?;
+            // Convert to Collection struct
+            let collection = Collection {
+                id: collection_json.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                name: collection_json.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                requests: collection_json.get("requests").cloned().unwrap_or(serde_json::json!([])),
+                folders: collection_json.get("folders").cloned(),
+                settings: collection_json.get("settings").cloned(),
+                protocol_type: collection_json.get("protocolType").and_then(|v| v.as_str()).unwrap_or("http").to_string(),
+                created_at: collection_json.get("createdAt").and_then(|v| v.as_i64()).unwrap_or(chrono::Utc::now().timestamp()),
+            };
             
-            let id = collection.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let name = collection.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let requests = serde_json::to_string(collection.get("requests").unwrap_or(&serde_json::json!([]))).unwrap_or_default();
-            let folders = collection.get("folders").map(|f| serde_json::to_string(f).unwrap_or_default());
-            let settings = collection.get("settings").map(|s| serde_json::to_string(s).unwrap_or_default());
-            let created_at = collection.get("createdAt").and_then(|v| v.as_i64()).unwrap_or(0);
+            // Save to storage
+            storage.save_collection(&workspace_id, &collection)?;
             
-            conn.execute(
-                "INSERT OR REPLACE INTO collections (id, name, requests, folders, settings, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![id, name, requests, folders, settings, created_at],
-            ).map_err(|e| format!("Failed to save collection: {}", e))?;
-            
-            imported.push(name.to_string());
+            imported.push(collection.name);
         }
     }
     
@@ -921,33 +800,27 @@ pub async fn sync_import_environments(app: tauri::AppHandle) -> Result<Vec<Strin
     let config = sync_get_config(app.clone()).await?;
     let sync_path = get_sync_path(&config);
     let environments_path = sync_path.join("environments");
+    let storage = app.state::<Arc<Storage>>();
     
     if !environments_path.exists() {
         return Ok(vec![]);
     }
     
+    // Get active workspace ID
+    let workspace_id = storage.get_active_workspace_id()?
+        .ok_or_else(|| "No active workspace".to_string())?;
+    
     // Get existing environment variables to preserve secret values
-    let existing_secrets: HashMap<String, HashMap<String, String>> = {
-        let db = app.state::<Arc<Database>>();
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn.prepare("SELECT id, variables FROM environments")
-            .map_err(|e| e.to_string())?;
-        let result: HashMap<String, HashMap<String, String>> = stmt
-            .query_map([], |row| {
-                let id: String = row.get(0)?;
-                let vars_str: String = row.get(1)?;
-                let vars: Vec<Variable> = serde_json::from_str(&vars_str).unwrap_or_default();
-                let secrets: HashMap<String, String> = vars.iter()
-                    .filter(|v| v.is_secret)
-                    .map(|v| (v.key.clone(), v.value.clone()))
-                    .collect();
-                Ok((id, secrets))
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        result
-    };
+    let existing_envs = storage.get_environments(&workspace_id)?;
+    let existing_secrets: HashMap<String, HashMap<String, String>> = existing_envs.iter()
+        .map(|env| {
+            let secrets: HashMap<String, String> = env.variables.iter()
+                .filter(|v| v.is_secret)
+                .map(|v| (v.key.clone(), v.value.clone()))
+                .collect();
+            (env.id.clone(), secrets)
+        })
+        .collect();
     
     let mut imported = Vec::new();
     
@@ -974,23 +847,17 @@ pub async fn sync_import_environments(app: tauri::AppHandle) -> Result<Vec<Strin
                 })
                 .collect();
             
-            // Save to database
-            {
-                let db = app.state::<Arc<Database>>();
-                let conn = db.conn.lock().map_err(|e| e.to_string())?;
-                conn.execute(
-                    "INSERT OR REPLACE INTO environments (id, name, color, variables, is_default, shareable, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    rusqlite::params![
-                        exported_env.id,
-                        exported_env.name,
-                        exported_env.color,
-                        serde_json::to_string(&variables).unwrap_or_default(),
-                        exported_env.is_default.map(|v| v as i32),
-                        1, // shareable = true
-                        exported_env.created_at
-                    ],
-                ).map_err(|e| format!("Failed to save environment: {}", e))?;
-            }
+            // Create Environment struct and save to storage
+            let environment = Environment {
+                id: exported_env.id,
+                name: exported_env.name.clone(),
+                color: exported_env.color,
+                variables,
+                is_default: exported_env.is_default,
+                created_at: exported_env.created_at,
+            };
+            
+            storage.save_environment(&workspace_id, &environment)?;
             
             imported.push(exported_env.name);
         }
@@ -1005,10 +872,15 @@ pub async fn sync_import_global_variables(app: tauri::AppHandle) -> Result<i32, 
     let config = sync_get_config(app.clone()).await?;
     let sync_path = get_sync_path(&config);
     let file_path = sync_path.join("global-variables.yaml");
+    let storage = app.state::<Arc<Storage>>();
     
     if !file_path.exists() {
         return Ok(0);
     }
+    
+    // Get active workspace ID
+    let workspace_id = storage.get_active_workspace_id()?
+        .ok_or_else(|| "No active workspace".to_string())?;
     
     let content = fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read global variables file: {}", e))?;
@@ -1016,37 +888,19 @@ pub async fn sync_import_global_variables(app: tauri::AppHandle) -> Result<i32, 
     let exported: ExportedGlobalVariables = serde_yaml::from_str(&content)
         .map_err(|e| format!("Failed to parse global variables YAML: {}", e))?;
     
-    // Get existing secret values
-    let existing_secrets: HashMap<String, String> = {
-        let db = app.state::<Arc<Database>>();
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn.prepare("SELECT key, value FROM global_variables WHERE is_secret = 1")
-            .map_err(|e| e.to_string())?;
-        let result: HashMap<String, String> = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        result
-    };
+    // Get existing secret values from storage
+    let existing_vars = storage.get_global_variables(&workspace_id)?;
+    let existing_secrets: HashMap<String, String> = existing_vars.iter()
+        .filter(|v| v.is_secret)
+        .map(|v| (v.key.clone(), v.value.clone()))
+        .collect();
     
     // Import variables
     for exported_var in &exported.variables {
         let existing_value = existing_secrets.get(&exported_var.key).map(|s| s.as_str());
         let var = import_variable(exported_var, existing_value);
         
-        let db = app.state::<Arc<Database>>();
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute(
-            "INSERT OR REPLACE INTO global_variables (id, key, value, description, is_secret, enabled) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![
-                var.id,
-                var.key,
-                var.value,
-                var.description,
-                var.is_secret as i32,
-                var.enabled as i32
-            ],
-        ).map_err(|e| format!("Failed to save global variable: {}", e))?;
+        storage.save_global_variable(&workspace_id, &var)?;
     }
     
     Ok(exported.variables.len() as i32)

@@ -695,11 +695,15 @@ export const useAppStore = () => {
   }
 
   // Collections
-  const addCollection = async (name: string) => {
+  const addCollection = async (name: string, protocolType?: ProtocolType) => {
+    // Use active tab's protocol if not specified
+    const currentProtocol = protocolType || (activeTab.value?.type === 'request' ? (activeTab.value as RequestTab).protocol : 'http')
+    
     const collection: Collection = { 
       id: generateId(), 
       name, 
       requests: [], 
+      protocolType: currentProtocol,
       createdAt: Date.now() 
     }
     collections.value = [...collections.value, collection]

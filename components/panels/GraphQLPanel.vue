@@ -148,14 +148,15 @@ const formatResponse = computed(() => {
                   class="h-4 w-4 rounded border-input accent-primary"
                   @change="store.toggleHeader(header.id)"
                 />
-                <UiInput
+                <UiHeaderKeyInput
                   :model-value="header.key"
                   placeholder="Header name"
                   class="flex-1"
                   @update:model-value="store.updateHeader(header.id, 'key', $event)"
                 />
-                <UiInput
+                <UiHeaderValueInput
                   :model-value="header.value"
+                  :header-key="header.key"
                   placeholder="Value"
                   class="flex-1"
                   @update:model-value="store.updateHeader(header.id, 'value', $event)"

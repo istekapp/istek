@@ -420,6 +420,7 @@ export interface Collection {
   requests: RequestType[]
   folders?: CollectionFolder[]
   settings?: FolderSettings  // Collection-level (workspace) settings
+  protocolType: ProtocolType  // Protocol type for this collection (http, grpc, graphql, etc.)
   createdAt: number
 }
 

@@ -506,8 +506,9 @@ watch(() => activeTab.value.request.bodyType, (newType) => {
             class="flex-1 h-10 text-base"
             @update:model-value="store.updateHeader(header.id, 'key', $event)"
           />
-          <UiVariableInput
+          <UiHeaderValueInput
             :model-value="header.value"
+            :header-key="header.key"
             placeholder="Value"
             class="flex-1 h-10 text-base"
             @update:model-value="store.updateHeader(header.id, 'value', $event)"

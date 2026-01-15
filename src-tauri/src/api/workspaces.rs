@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use std::sync::Arc;
 
-use crate::database::{Database, Workspace};
+use crate::storage::{Storage, Workspace};
 use super::{ApiError, PaginatedResponse, PaginationQuery, SuccessResponse};
 
 // Request/Response types
@@ -64,33 +64,20 @@ impl From<Workspace> for WorkspaceResponse {
     tag = "Workspaces"
 )]
 pub async fn list_workspaces(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Query(pagination): Query<PaginationQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let workspaces = storage.get_workspaces()
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    // Get total count
-    let total: i64 = conn
-        .query_row("SELECT COUNT(*) FROM workspaces", [], |row| row.get(0))
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let total = workspaces.len() as i64;
+    let start = pagination.offset as usize;
+    let end = std::cmp::min(start + pagination.limit as usize, workspaces.len());
     
-    // Get paginated items
-    let mut stmt = conn
-        .prepare("SELECT id, name, sync_path, is_default, created_at FROM workspaces ORDER BY created_at DESC LIMIT ?1 OFFSET ?2")
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    let items: Vec<WorkspaceResponse> = stmt
-        .query_map([pagination.limit, pagination.offset], |row| {
-            Ok(Workspace {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                sync_path: row.get(2)?,
-                is_default: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        })
-        .map_err(|e| ApiError::internal_error(e.to_string()))?
-        .filter_map(|r| r.ok())
+    let items: Vec<WorkspaceResponse> = workspaces
+        .into_iter()
+        .skip(start)
+        .take(end - start)
         .map(WorkspaceResponse::from)
         .collect();
     
@@ -114,28 +101,15 @@ pub async fn list_workspaces(
     tag = "Workspaces"
 )]
 pub async fn create_workspace(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Json(req): Json<CreateWorkspaceRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    let id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().timestamp_millis();
-    
-    conn.execute(
-        "INSERT INTO workspaces (id, name, sync_path, is_default, created_at) VALUES (?1, ?2, ?3, 0, ?4)",
-        rusqlite::params![id, req.name, req.sync_path, created_at],
-    ).map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let workspace = storage.create_workspace(req.name, req.sync_path)
+        .map_err(|e| ApiError::internal_error(e))?;
     
     Ok((
         axum::http::StatusCode::CREATED,
-        Json(WorkspaceResponse {
-            id,
-            name: req.name,
-            sync_path: req.sync_path,
-            is_default: false,
-            created_at,
-        })
+        Json(WorkspaceResponse::from(workspace))
     ))
 }
 
@@ -153,26 +127,12 @@ pub async fn create_workspace(
     tag = "Workspaces"
 )]
 pub async fn get_workspace(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path(workspace_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    let workspace = conn
-        .query_row(
-            "SELECT id, name, sync_path, is_default, created_at FROM workspaces WHERE id = ?1",
-            [&workspace_id],
-            |row| {
-                Ok(Workspace {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    sync_path: row.get(2)?,
-                    is_default: row.get(3)?,
-                    created_at: row.get(4)?,
-                })
-            },
-        )
-        .map_err(|_| ApiError::not_found("Workspace not found"))?;
+    let workspace = storage.get_workspace(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?
+        .ok_or_else(|| ApiError::not_found("Workspace not found"))?;
     
     Ok(Json(WorkspaceResponse::from(workspace)))
 }
@@ -192,28 +152,13 @@ pub async fn get_workspace(
     tag = "Workspaces"
 )]
 pub async fn update_workspace(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path(workspace_id): Path<String>,
     Json(req): Json<UpdateWorkspaceRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    // Check if workspace exists
-    let mut workspace: Workspace = conn
-        .query_row(
-            "SELECT id, name, sync_path, is_default, created_at FROM workspaces WHERE id = ?1",
-            [&workspace_id],
-            |row| {
-                Ok(Workspace {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    sync_path: row.get(2)?,
-                    is_default: row.get(3)?,
-                    created_at: row.get(4)?,
-                })
-            },
-        )
-        .map_err(|_| ApiError::not_found("Workspace not found"))?;
+    let mut workspace = storage.get_workspace(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?
+        .ok_or_else(|| ApiError::not_found("Workspace not found"))?;
     
     // Apply updates
     if let Some(name) = req.name {
@@ -223,10 +168,8 @@ pub async fn update_workspace(
         workspace.sync_path = req.sync_path;
     }
     
-    conn.execute(
-        "UPDATE workspaces SET name = ?1, sync_path = ?2 WHERE id = ?3",
-        rusqlite::params![workspace.name, workspace.sync_path, workspace_id],
-    ).map_err(|e| ApiError::internal_error(e.to_string()))?;
+    storage.update_workspace(&workspace)
+        .map_err(|e| ApiError::internal_error(e))?;
     
     Ok(Json(WorkspaceResponse::from(workspace)))
 }
@@ -245,18 +188,19 @@ pub async fn update_workspace(
     tag = "Workspaces"
 )]
 pub async fn delete_workspace(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path(workspace_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    // Check if workspace exists
+    let workspace = storage.get_workspace(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    let affected = conn
-        .execute("DELETE FROM workspaces WHERE id = ?1", [&workspace_id])
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    if affected == 0 {
+    if workspace.is_none() {
         return Err(ApiError::not_found("Workspace not found"));
     }
+    
+    storage.delete_workspace(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
     Ok(Json(SuccessResponse::ok()))
 }
@@ -275,29 +219,19 @@ pub async fn delete_workspace(
     tag = "Workspaces"
 )]
 pub async fn activate_workspace(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path(workspace_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
     // Check if workspace exists
-    let exists: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM workspaces WHERE id = ?1)",
-            [&workspace_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let workspace = storage.get_workspace(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    if !exists {
+    if workspace.is_none() {
         return Err(ApiError::not_found("Workspace not found"));
     }
     
-    // Update active workspace in settings
-    conn.execute(
-        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('active_workspace_id', ?1)",
-        [&workspace_id],
-    ).map_err(|e| ApiError::internal_error(e.to_string()))?;
+    storage.set_active_workspace(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
     Ok(Json(SuccessResponse::with_message("Workspace activated")))
 }

@@ -8,11 +8,11 @@ use serde_json::Value;
 use utoipa::ToSchema;
 use std::sync::Arc;
 
-use crate::database::Database;
+use crate::storage::{Storage, Environment, Variable};
 use super::{ApiError, PaginatedResponse, PaginationQuery, SuccessResponse};
 
 // Request/Response types
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VariableResponse {
     pub id: String,
@@ -26,6 +26,34 @@ pub struct VariableResponse {
     pub enabled: bool,
 }
 
+impl From<Variable> for VariableResponse {
+    fn from(v: Variable) -> Self {
+        VariableResponse {
+            id: v.id,
+            key: v.key,
+            value: v.value,
+            description: v.description,
+            is_secret: v.is_secret,
+            secret_provider: v.secret_provider,
+            enabled: v.enabled,
+        }
+    }
+}
+
+impl From<VariableResponse> for Variable {
+    fn from(v: VariableResponse) -> Self {
+        Variable {
+            id: v.id,
+            key: v.key,
+            value: v.value,
+            description: v.description,
+            is_secret: v.is_secret,
+            secret_provider: v.secret_provider,
+            enabled: v.enabled,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentResponse {
@@ -36,6 +64,19 @@ pub struct EnvironmentResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_default: Option<bool>,
     pub created_at: i64,
+}
+
+impl From<Environment> for EnvironmentResponse {
+    fn from(e: Environment) -> Self {
+        EnvironmentResponse {
+            id: e.id,
+            name: e.name,
+            color: e.color,
+            variables: e.variables.into_iter().map(VariableResponse::from).collect(),
+            is_default: e.is_default,
+            created_at: e.created_at,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -77,42 +118,22 @@ pub struct UpdateEnvironmentRequest {
     tag = "Environments"
 )]
 pub async fn list_environments(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path(workspace_id): Path<String>,
     Query(pagination): Query<PaginationQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let environments = storage.get_environments(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    // Get total count for this workspace
-    let total: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM environments WHERE workspace_id = ?1",
-            [&workspace_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let total = environments.len() as i64;
+    let start = pagination.offset as usize;
+    let end = std::cmp::min(start + pagination.limit as usize, environments.len());
     
-    // Get paginated items
-    let mut stmt = conn
-        .prepare("SELECT id, name, color, variables, is_default, created_at FROM environments WHERE workspace_id = ?1 ORDER BY created_at ASC LIMIT ?2 OFFSET ?3")
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    let items: Vec<EnvironmentResponse> = stmt
-        .query_map(rusqlite::params![workspace_id, pagination.limit, pagination.offset], |row| {
-            let variables_str: String = row.get(3)?;
-            let variables: Vec<VariableResponse> = serde_json::from_str(&variables_str).unwrap_or_default();
-            
-            Ok(EnvironmentResponse {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                color: row.get(2)?,
-                variables,
-                is_default: row.get::<_, Option<i32>>(4)?.map(|v| v != 0),
-                created_at: row.get(5)?,
-            })
-        })
-        .map_err(|e| ApiError::internal_error(e.to_string()))?
-        .filter_map(|r| r.ok())
+    let items: Vec<EnvironmentResponse> = environments
+        .into_iter()
+        .skip(start)
+        .take(end - start)
+        .map(EnvironmentResponse::from)
         .collect();
     
     Ok(Json(PaginatedResponse {
@@ -138,20 +159,24 @@ pub async fn list_environments(
     tag = "Environments"
 )]
 pub async fn create_environment(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path(workspace_id): Path<String>,
     Json(req): Json<CreateEnvironmentRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
     let id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().timestamp_millis();
-    let variables_str = serde_json::to_string(&req.variables).map_err(|e| ApiError::internal_error(e.to_string()))?;
     
-    conn.execute(
-        "INSERT INTO environments (id, name, color, variables, is_default, created_at, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        rusqlite::params![id, req.name, req.color, variables_str, req.is_default.map(|v| v as i32), created_at, workspace_id],
-    ).map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let environment = Environment {
+        id: id.clone(),
+        name: req.name.clone(),
+        color: req.color.clone(),
+        variables: req.variables.clone().into_iter().map(Variable::from).collect(),
+        is_default: req.is_default,
+        created_at,
+    };
+    
+    storage.save_environment(&workspace_id, &environment)
+        .map_err(|e| ApiError::internal_error(e))?;
     
     Ok((
         axum::http::StatusCode::CREATED,
@@ -181,32 +206,17 @@ pub async fn create_environment(
     tag = "Environments"
 )]
 pub async fn get_environment(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((workspace_id, environment_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let environments = storage.get_environments(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    let environment = conn
-        .query_row(
-            "SELECT id, name, color, variables, is_default, created_at FROM environments WHERE id = ?1 AND workspace_id = ?2",
-            rusqlite::params![environment_id, workspace_id],
-            |row| {
-                let variables_str: String = row.get(3)?;
-                let variables: Vec<VariableResponse> = serde_json::from_str(&variables_str).unwrap_or_default();
-                
-                Ok(EnvironmentResponse {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    color: row.get(2)?,
-                    variables,
-                    is_default: row.get::<_, Option<i32>>(4)?.map(|v| v != 0),
-                    created_at: row.get(5)?,
-                })
-            },
-        )
-        .map_err(|_| ApiError::not_found("Environment not found"))?;
+    let environment = environments.into_iter()
+        .find(|e| e.id == environment_id)
+        .ok_or_else(|| ApiError::not_found("Environment not found"))?;
     
-    Ok(Json(environment))
+    Ok(Json(EnvironmentResponse::from(environment)))
 }
 
 /// Update an environment
@@ -225,32 +235,16 @@ pub async fn get_environment(
     tag = "Environments"
 )]
 pub async fn update_environment(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((workspace_id, environment_id)): Path<(String, String)>,
     Json(req): Json<UpdateEnvironmentRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let environments = storage.get_environments(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    // Get existing environment
-    let mut environment = conn
-        .query_row(
-            "SELECT id, name, color, variables, is_default, created_at FROM environments WHERE id = ?1 AND workspace_id = ?2",
-            rusqlite::params![environment_id, workspace_id],
-            |row| {
-                let variables_str: String = row.get(3)?;
-                let variables: Vec<VariableResponse> = serde_json::from_str(&variables_str).unwrap_or_default();
-                
-                Ok(EnvironmentResponse {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    color: row.get(2)?,
-                    variables,
-                    is_default: row.get::<_, Option<i32>>(4)?.map(|v| v != 0),
-                    created_at: row.get(5)?,
-                })
-            },
-        )
-        .map_err(|_| ApiError::not_found("Environment not found"))?;
+    let mut environment = environments.into_iter()
+        .find(|e| e.id == environment_id)
+        .ok_or_else(|| ApiError::not_found("Environment not found"))?;
     
     // Apply updates
     if let Some(name) = req.name {
@@ -260,20 +254,16 @@ pub async fn update_environment(
         environment.color = color;
     }
     if let Some(variables) = req.variables {
-        environment.variables = variables;
+        environment.variables = variables.into_iter().map(Variable::from).collect();
     }
     if req.is_default.is_some() {
         environment.is_default = req.is_default;
     }
     
-    let variables_str = serde_json::to_string(&environment.variables).map_err(|e| ApiError::internal_error(e.to_string()))?;
+    storage.save_environment(&workspace_id, &environment)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    conn.execute(
-        "UPDATE environments SET name = ?1, color = ?2, variables = ?3, is_default = ?4 WHERE id = ?5 AND workspace_id = ?6",
-        rusqlite::params![environment.name, environment.color, variables_str, environment.is_default.map(|v| v as i32), environment_id, workspace_id],
-    ).map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    Ok(Json(environment))
+    Ok(Json(EnvironmentResponse::from(environment)))
 }
 
 /// Delete an environment
@@ -291,28 +281,28 @@ pub async fn update_environment(
     tag = "Environments"
 )]
 pub async fn delete_environment(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((workspace_id, environment_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    // Check if environment exists
+    let environments = storage.get_environments(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    let affected = conn
-        .execute(
-            "DELETE FROM environments WHERE id = ?1 AND workspace_id = ?2",
-            rusqlite::params![environment_id, workspace_id],
-        )
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    if affected == 0 {
+    if !environments.iter().any(|e| e.id == environment_id) {
         return Err(ApiError::not_found("Environment not found"));
     }
     
+    storage.delete_environment(&workspace_id, &environment_id)
+        .map_err(|e| ApiError::internal_error(e))?;
+    
     // Clear active environment if it was the deleted one
-    let active_env_key = format!("active_environment_id_{}", workspace_id);
-    conn.execute(
-        "DELETE FROM app_settings WHERE key = ?1 AND value = ?2",
-        rusqlite::params![active_env_key, environment_id],
-    ).ok();
+    let active_env_id = storage.get_active_environment_id(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
+    
+    if active_env_id.as_deref() == Some(&environment_id) {
+        storage.set_active_environment(&workspace_id, None)
+            .map_err(|e| ApiError::internal_error(e))?;
+    }
     
     Ok(Json(SuccessResponse::ok()))
 }
@@ -332,30 +322,19 @@ pub async fn delete_environment(
     tag = "Environments"
 )]
 pub async fn activate_environment(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((workspace_id, environment_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
     // Verify environment exists
-    let exists: bool = conn
-        .query_row(
-            "SELECT 1 FROM environments WHERE id = ?1 AND workspace_id = ?2",
-            rusqlite::params![environment_id, workspace_id],
-            |_| Ok(true),
-        )
-        .unwrap_or(false);
+    let environments = storage.get_environments(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    if !exists {
+    if !environments.iter().any(|e| e.id == environment_id) {
         return Err(ApiError::not_found("Environment not found"));
     }
     
-    // Set as active environment for this workspace
-    let active_env_key = format!("active_environment_id_{}", workspace_id);
-    conn.execute(
-        "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
-        rusqlite::params![active_env_key, environment_id],
-    ).map_err(|e| ApiError::internal_error(e.to_string()))?;
+    storage.set_active_environment(&workspace_id, Some(&environment_id))
+        .map_err(|e| ApiError::internal_error(e))?;
     
     Ok(Json(SuccessResponse::with_message("Environment activated")))
 }
@@ -373,16 +352,11 @@ pub async fn activate_environment(
     tag = "Environments"
 )]
 pub async fn deactivate_environment(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path(workspace_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    let active_env_key = format!("active_environment_id_{}", workspace_id);
-    conn.execute(
-        "DELETE FROM app_settings WHERE key = ?1",
-        rusqlite::params![active_env_key],
-    ).map_err(|e| ApiError::internal_error(e.to_string()))?;
+    storage.set_active_environment(&workspace_id, None)
+        .map_err(|e| ApiError::internal_error(e))?;
     
     Ok(Json(SuccessResponse::with_message("Active environment cleared")))
 }

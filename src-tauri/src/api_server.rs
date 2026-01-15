@@ -15,9 +15,10 @@ use crate::api::{
     variables::{self, VariableResponse, CreateVariableRequest, UpdateVariableRequest},
     integrations::{self, IntegrationResponse, CreateIntegrationRequest, UpdateIntegrationRequest, TestIntegrationRequest, TestIntegrationResponse, FetchSecretRequest, FetchSecretResponse},
     history::{self, HistoryItemResponse},
+    tests::{self, RunTestsRequest, RunCollectionTestsRequest, TestRunSummary, TestResult, TestRequest, Assertion, AssertionResult, KeyValue as TestKeyValue, TestStatus, AssertionType, JsonPathOperator, VariableExtraction, ExtractedVariable},
     ApiError, ErrorDetail, SuccessResponse,
 };
-use crate::database::Database;
+use crate::storage::Storage;
 
 const API_PORT: u16 = 47835; // ISTEK in phone keypad: I=4, S=7, T=8, E=3, K=5
 
@@ -69,6 +70,9 @@ const API_PORT: u16 = 47835; // ISTEK in phone keypad: I=4, S=7, T=8, E=3, K=5
         history::get_history_item,
         history::delete_history_item,
         history::clear_history,
+        // Tests
+        tests::run_tests,
+        tests::run_collection_tests,
     ),
     components(
         schemas(
@@ -107,6 +111,20 @@ const API_PORT: u16 = 47835; // ISTEK in phone keypad: I=4, S=7, T=8, E=3, K=5
             FetchSecretResponse,
             // History
             HistoryItemResponse,
+            // Tests
+            RunTestsRequest,
+            RunCollectionTestsRequest,
+            TestRunSummary,
+            TestResult,
+            TestRequest,
+            Assertion,
+            AssertionResult,
+            TestKeyValue,
+            TestStatus,
+            AssertionType,
+            JsonPathOperator,
+            VariableExtraction,
+            ExtractedVariable,
         )
     ),
     tags(
@@ -116,7 +134,8 @@ const API_PORT: u16 = 47835; // ISTEK in phone keypad: I=4, S=7, T=8, E=3, K=5
         (name = "Environments", description = "Environment management"),
         (name = "Variables", description = "Global variable management"),
         (name = "Integrations", description = "Secret provider integrations"),
-        (name = "History", description = "Request history")
+        (name = "History", description = "Request history"),
+        (name = "Tests", description = "Test runner endpoints")
     ),
     info(
         title = "Istek API",
@@ -126,7 +145,7 @@ const API_PORT: u16 = 47835; // ISTEK in phone keypad: I=4, S=7, T=8, E=3, K=5
 )]
 struct ApiDoc;
 
-pub fn create_router(db: Arc<Database>) -> Router {
+pub fn create_router(storage: Arc<Storage>) -> Router {
     // CORS configuration - allow all origins for local development
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -163,15 +182,19 @@ pub fn create_router(db: Arc<Database>) -> Router {
         // History
         .route("/api/workspaces/:workspace_id/history", get(history::list_history).delete(history::clear_history))
         .route("/api/workspaces/:workspace_id/history/:history_id", get(history::get_history_item).delete(history::delete_history_item))
+        // Tests
+        .route("/api/workspaces/:workspace_id/tests/run", post(tests::run_tests))
+        .route("/api/workspaces/:workspace_id/collections/:collection_id/tests/run", post(tests::run_collection_tests))
+        .route("/api/workspaces/:workspace_id/collections/:collection_id/tests/stream", post(tests::run_collection_tests_stream))
         // Swagger UI (also serves /api/openapi.json)
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
         // State and middleware
-        .with_state(db)
+        .with_state(storage)
         .layer(cors)
 }
 
-pub async fn start_server(db: Arc<Database>) {
-    let router = create_router(db);
+pub async fn start_server(storage: Arc<Storage>) {
+    let router = create_router(storage);
     
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], API_PORT));
     

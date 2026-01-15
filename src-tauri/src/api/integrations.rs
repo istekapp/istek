@@ -8,7 +8,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 use std::sync::Arc;
 
-use crate::database::Database;
+use crate::storage::{Storage, SecretProvider};
 use super::{ApiError, PaginatedResponse, PaginationQuery, SuccessResponse};
 
 // Request/Response types for Secret Providers (integrations)
@@ -23,6 +23,19 @@ pub struct IntegrationResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<Value>,
     pub created_at: i64,
+}
+
+impl From<SecretProvider> for IntegrationResponse {
+    fn from(p: SecretProvider) -> Self {
+        IntegrationResponse {
+            id: p.id,
+            name: p.name,
+            provider_type: p.provider_type,
+            enabled: p.enabled,
+            config: p.config,
+            created_at: p.created_at,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -100,41 +113,22 @@ pub struct FetchSecretResponse {
     tag = "Integrations"
 )]
 pub async fn list_integrations(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path(_workspace_id): Path<String>,
     Query(pagination): Query<PaginationQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let providers = storage.get_secret_providers()
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    // Get total count (integrations are global)
-    let total: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM secret_providers",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let total = providers.len() as i64;
+    let start = pagination.offset as usize;
+    let end = std::cmp::min(start + pagination.limit as usize, providers.len());
     
-    // Get paginated items
-    let mut stmt = conn
-        .prepare("SELECT id, name, provider_type, enabled, config, created_at FROM secret_providers ORDER BY created_at ASC LIMIT ?1 OFFSET ?2")
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    let items: Vec<IntegrationResponse> = stmt
-        .query_map(rusqlite::params![pagination.limit, pagination.offset], |row| {
-            let config_str: Option<String> = row.get(4)?;
-            
-            Ok(IntegrationResponse {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                provider_type: row.get(2)?,
-                enabled: row.get::<_, i32>(3)? != 0,
-                config: config_str.and_then(|s| serde_json::from_str(&s).ok()),
-                created_at: row.get(5)?,
-            })
-        })
-        .map_err(|e| ApiError::internal_error(e.to_string()))?
-        .filter_map(|r| r.ok())
+    let items: Vec<IntegrationResponse> = providers
+        .into_iter()
+        .skip(start)
+        .take(end - start)
+        .map(IntegrationResponse::from)
         .collect();
     
     Ok(Json(PaginatedResponse {
@@ -160,20 +154,24 @@ pub async fn list_integrations(
     tag = "Integrations"
 )]
 pub async fn create_integration(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path(_workspace_id): Path<String>,
     Json(req): Json<CreateIntegrationRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
     let id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().timestamp_millis();
-    let config_str = req.config.as_ref().map(|c| serde_json::to_string(c).unwrap_or_default());
     
-    conn.execute(
-        "INSERT INTO secret_providers (id, name, provider_type, enabled, config, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![id, req.name, req.provider_type, req.enabled as i32, config_str, created_at],
-    ).map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let provider = SecretProvider {
+        id: id.clone(),
+        name: req.name.clone(),
+        provider_type: req.provider_type.clone(),
+        enabled: req.enabled,
+        config: req.config.clone(),
+        created_at,
+    };
+    
+    storage.save_secret_provider(&provider)
+        .map_err(|e| ApiError::internal_error(e))?;
     
     Ok((
         axum::http::StatusCode::CREATED,
@@ -203,31 +201,17 @@ pub async fn create_integration(
     tag = "Integrations"
 )]
 pub async fn get_integration(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((_workspace_id, integration_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let providers = storage.get_secret_providers()
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    let integration = conn
-        .query_row(
-            "SELECT id, name, provider_type, enabled, config, created_at FROM secret_providers WHERE id = ?1",
-            rusqlite::params![integration_id],
-            |row| {
-                let config_str: Option<String> = row.get(4)?;
-                
-                Ok(IntegrationResponse {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    provider_type: row.get(2)?,
-                    enabled: row.get::<_, i32>(3)? != 0,
-                    config: config_str.and_then(|s| serde_json::from_str(&s).ok()),
-                    created_at: row.get(5)?,
-                })
-            },
-        )
-        .map_err(|_| ApiError::not_found("Integration not found"))?;
+    let provider = providers.into_iter()
+        .find(|p| p.id == integration_id)
+        .ok_or_else(|| ApiError::not_found("Integration not found"))?;
     
-    Ok(Json(integration))
+    Ok(Json(IntegrationResponse::from(provider)))
 }
 
 /// Update an integration
@@ -246,54 +230,35 @@ pub async fn get_integration(
     tag = "Integrations"
 )]
 pub async fn update_integration(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((_workspace_id, integration_id)): Path<(String, String)>,
     Json(req): Json<UpdateIntegrationRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let providers = storage.get_secret_providers()
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    // Get existing integration
-    let mut integration = conn
-        .query_row(
-            "SELECT id, name, provider_type, enabled, config, created_at FROM secret_providers WHERE id = ?1",
-            rusqlite::params![integration_id],
-            |row| {
-                let config_str: Option<String> = row.get(4)?;
-                
-                Ok(IntegrationResponse {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    provider_type: row.get(2)?,
-                    enabled: row.get::<_, i32>(3)? != 0,
-                    config: config_str.and_then(|s| serde_json::from_str(&s).ok()),
-                    created_at: row.get(5)?,
-                })
-            },
-        )
-        .map_err(|_| ApiError::not_found("Integration not found"))?;
+    let mut provider = providers.into_iter()
+        .find(|p| p.id == integration_id)
+        .ok_or_else(|| ApiError::not_found("Integration not found"))?;
     
     // Apply updates
     if let Some(name) = req.name {
-        integration.name = name;
+        provider.name = name;
     }
     if let Some(provider_type) = req.provider_type {
-        integration.provider_type = provider_type;
+        provider.provider_type = provider_type;
     }
     if let Some(enabled) = req.enabled {
-        integration.enabled = enabled;
+        provider.enabled = enabled;
     }
     if req.config.is_some() {
-        integration.config = req.config;
+        provider.config = req.config;
     }
     
-    let config_str = integration.config.as_ref().map(|c| serde_json::to_string(c).unwrap_or_default());
+    storage.save_secret_provider(&provider)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    conn.execute(
-        "UPDATE secret_providers SET name = ?1, provider_type = ?2, enabled = ?3, config = ?4 WHERE id = ?5",
-        rusqlite::params![integration.name, integration.provider_type, integration.enabled as i32, config_str, integration_id],
-    ).map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    Ok(Json(integration))
+    Ok(Json(IntegrationResponse::from(provider)))
 }
 
 /// Delete an integration
@@ -311,21 +276,18 @@ pub async fn update_integration(
     tag = "Integrations"
 )]
 pub async fn delete_integration(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((_workspace_id, integration_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let providers = storage.get_secret_providers()
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    let affected = conn
-        .execute(
-            "DELETE FROM secret_providers WHERE id = ?1",
-            rusqlite::params![integration_id],
-        )
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    if affected == 0 {
+    if !providers.iter().any(|p| p.id == integration_id) {
         return Err(ApiError::not_found("Integration not found"));
     }
+    
+    storage.delete_secret_provider(&integration_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
     Ok(Json(SuccessResponse::ok()))
 }
@@ -345,48 +307,23 @@ pub async fn delete_integration(
     tag = "Integrations"
 )]
 pub async fn toggle_integration(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((_workspace_id, integration_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let providers = storage.get_secret_providers()
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    // Get current state
-    let current_enabled: bool = conn
-        .query_row(
-            "SELECT enabled FROM secret_providers WHERE id = ?1",
-            rusqlite::params![integration_id],
-            |row| Ok(row.get::<_, i32>(0)? != 0),
-        )
-        .map_err(|_| ApiError::not_found("Integration not found"))?;
+    let mut provider = providers.into_iter()
+        .find(|p| p.id == integration_id)
+        .ok_or_else(|| ApiError::not_found("Integration not found"))?;
     
     // Toggle
-    let new_enabled = !current_enabled;
-    conn.execute(
-        "UPDATE secret_providers SET enabled = ?1 WHERE id = ?2",
-        rusqlite::params![new_enabled as i32, integration_id],
-    ).map_err(|e| ApiError::internal_error(e.to_string()))?;
+    provider.enabled = !provider.enabled;
     
-    // Return updated integration
-    let integration = conn
-        .query_row(
-            "SELECT id, name, provider_type, enabled, config, created_at FROM secret_providers WHERE id = ?1",
-            rusqlite::params![integration_id],
-            |row| {
-                let config_str: Option<String> = row.get(4)?;
-                
-                Ok(IntegrationResponse {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    provider_type: row.get(2)?,
-                    enabled: row.get::<_, i32>(3)? != 0,
-                    config: config_str.and_then(|s| serde_json::from_str(&s).ok()),
-                    created_at: row.get(5)?,
-                })
-            },
-        )
-        .map_err(|_| ApiError::not_found("Integration not found"))?;
+    storage.save_secret_provider(&provider)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    Ok(Json(integration))
+    Ok(Json(IntegrationResponse::from(provider)))
 }
 
 /// Test an integration connection
@@ -405,26 +342,20 @@ pub async fn toggle_integration(
     tag = "Integrations"
 )]
 pub async fn test_integration(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((_workspace_id, integration_id)): Path<(String, String)>,
     Json(_req): Json<TestIntegrationRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let providers = storage.get_secret_providers()
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    // Verify integration exists
-    let (provider_type, config_str): (String, Option<String>) = conn
-        .query_row(
-            "SELECT provider_type, config FROM secret_providers WHERE id = ?1",
-            rusqlite::params![integration_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|_| ApiError::not_found("Integration not found"))?;
+    let provider = providers.into_iter()
+        .find(|p| p.id == integration_id)
+        .ok_or_else(|| ApiError::not_found("Integration not found"))?;
     
     // TODO: Implement actual integration testing based on provider_type
     // For now, just return a placeholder response
-    let _ = config_str; // Silence unused warning
-    
-    let response = match provider_type.as_str() {
+    let response = match provider.provider_type.as_str() {
         "1password" => TestIntegrationResponse {
             success: true,
             message: Some("1Password integration configured (actual test not implemented)".to_string()),
@@ -443,7 +374,7 @@ pub async fn test_integration(
         _ => TestIntegrationResponse {
             success: false,
             message: None,
-            error: Some(format!("Unknown provider type: {}", provider_type)),
+            error: Some(format!("Unknown provider type: {}", provider.provider_type)),
         },
     };
     
@@ -467,22 +398,18 @@ pub async fn test_integration(
     tag = "Integrations"
 )]
 pub async fn fetch_secret(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((_workspace_id, integration_id)): Path<(String, String)>,
     Json(req): Json<FetchSecretRequest>,
 ) -> Result<Json<FetchSecretResponse>, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let providers = storage.get_secret_providers()
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    // Verify integration exists and is enabled
-    let (enabled, _provider_type, _config_str): (bool, String, Option<String>) = conn
-        .query_row(
-            "SELECT enabled, provider_type, config FROM secret_providers WHERE id = ?1",
-            rusqlite::params![integration_id],
-            |row| Ok((row.get::<_, i32>(0)? != 0, row.get(1)?, row.get(2)?)),
-        )
-        .map_err(|_| ApiError::not_found("Integration not found"))?;
+    let provider = providers.into_iter()
+        .find(|p| p.id == integration_id)
+        .ok_or_else(|| ApiError::not_found("Integration not found"))?;
     
-    if !enabled {
+    if !provider.enabled {
         return Err(ApiError::bad_request("Integration is disabled"));
     }
     

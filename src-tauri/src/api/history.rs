@@ -8,7 +8,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 use std::sync::Arc;
 
-use crate::database::Database;
+use crate::storage::{Storage, HistoryItem};
 use super::{ApiError, PaginatedResponse, PaginationQuery, SuccessResponse};
 
 // Request/Response types
@@ -20,6 +20,17 @@ pub struct HistoryItemResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response: Option<Value>,
     pub timestamp: i64,
+}
+
+impl From<HistoryItem> for HistoryItemResponse {
+    fn from(h: HistoryItem) -> Self {
+        HistoryItemResponse {
+            id: h.id,
+            request: h.request,
+            response: h.response,
+            timestamp: h.timestamp,
+        }
+    }
 }
 
 /// List history items in a workspace
@@ -37,40 +48,22 @@ pub struct HistoryItemResponse {
     tag = "History"
 )]
 pub async fn list_history(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path(workspace_id): Path<String>,
     Query(pagination): Query<PaginationQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let history = storage.get_history(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    // Get total count for this workspace
-    let total: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM history WHERE workspace_id = ?1",
-            [&workspace_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let total = history.len() as i64;
+    let start = pagination.offset as usize;
+    let end = std::cmp::min(start + pagination.limit as usize, history.len());
     
-    // Get paginated items (newest first)
-    let mut stmt = conn
-        .prepare("SELECT id, request, response, timestamp FROM history WHERE workspace_id = ?1 ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3")
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    let items: Vec<HistoryItemResponse> = stmt
-        .query_map(rusqlite::params![workspace_id, pagination.limit, pagination.offset], |row| {
-            let request_str: String = row.get(1)?;
-            let response_str: Option<String> = row.get(2)?;
-            
-            Ok(HistoryItemResponse {
-                id: row.get(0)?,
-                request: serde_json::from_str(&request_str).unwrap_or(Value::Object(serde_json::Map::new())),
-                response: response_str.and_then(|s| serde_json::from_str(&s).ok()),
-                timestamp: row.get(3)?,
-            })
-        })
-        .map_err(|e| ApiError::internal_error(e.to_string()))?
-        .filter_map(|r| r.ok())
+    let items: Vec<HistoryItemResponse> = history
+        .into_iter()
+        .skip(start)
+        .take(end - start)
+        .map(HistoryItemResponse::from)
         .collect();
     
     Ok(Json(PaginatedResponse {
@@ -96,30 +89,17 @@ pub async fn list_history(
     tag = "History"
 )]
 pub async fn get_history_item(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((workspace_id, history_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let history = storage.get_history(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    let item = conn
-        .query_row(
-            "SELECT id, request, response, timestamp FROM history WHERE id = ?1 AND workspace_id = ?2",
-            rusqlite::params![history_id, workspace_id],
-            |row| {
-                let request_str: String = row.get(1)?;
-                let response_str: Option<String> = row.get(2)?;
-                
-                Ok(HistoryItemResponse {
-                    id: row.get(0)?,
-                    request: serde_json::from_str(&request_str).unwrap_or(Value::Object(serde_json::Map::new())),
-                    response: response_str.and_then(|s| serde_json::from_str(&s).ok()),
-                    timestamp: row.get(3)?,
-                })
-            },
-        )
-        .map_err(|_| ApiError::not_found("History item not found"))?;
+    let item = history.into_iter()
+        .find(|h| h.id == history_id)
+        .ok_or_else(|| ApiError::not_found("History item not found"))?;
     
-    Ok(Json(item))
+    Ok(Json(HistoryItemResponse::from(item)))
 }
 
 /// Delete a specific history item
@@ -137,21 +117,18 @@ pub async fn get_history_item(
     tag = "History"
 )]
 pub async fn delete_history_item(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((workspace_id, history_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let history = storage.get_history(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    let affected = conn
-        .execute(
-            "DELETE FROM history WHERE id = ?1 AND workspace_id = ?2",
-            rusqlite::params![history_id, workspace_id],
-        )
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    if affected == 0 {
+    if !history.iter().any(|h| h.id == history_id) {
         return Err(ApiError::not_found("History item not found"));
     }
+    
+    storage.delete_history_item(&workspace_id, &history_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
     Ok(Json(SuccessResponse::ok()))
 }
@@ -169,15 +146,11 @@ pub async fn delete_history_item(
     tag = "History"
 )]
 pub async fn clear_history(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path(workspace_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    conn.execute(
-        "DELETE FROM history WHERE workspace_id = ?1",
-        rusqlite::params![workspace_id],
-    ).map_err(|e| ApiError::internal_error(e.to_string()))?;
+    storage.clear_history(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
     Ok(Json(SuccessResponse::with_message("History cleared")))
 }

@@ -188,14 +188,15 @@ const tryParseJson = (data: string) => {
               class="h-4 w-4 rounded border-input"
               @change="store.toggleSseHeader(header.id)"
             />
-            <UiInput
+            <UiHeaderKeyInput
               :model-value="header.key"
               placeholder="Header"
               class="flex-1 h-8 text-sm"
               @update:model-value="store.updateSseHeader(header.id, 'key', $event)"
             />
-            <UiInput
+            <UiHeaderValueInput
               :model-value="header.value"
+              :header-key="header.key"
               placeholder="Value"
               class="flex-1 h-8 text-sm"
               @update:model-value="store.updateSseHeader(header.id, 'value', $event)"

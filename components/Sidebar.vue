@@ -294,6 +294,33 @@ const getTotalRequestCount = (collection: Collection) => {
   return count
 }
 
+// Get current active protocol from the active tab
+const activeProtocol = computed(() => {
+  const tab = store.activeTab.value
+  if (tab?.type === 'request') {
+    return (tab as any).protocol || 'http'
+  }
+  return 'http'
+})
+
+// Filter collections by the active protocol
+const filteredCollections = computed(() => {
+  return collections.value.filter((c: Collection) => {
+    // Default to 'http' if protocolType is not set (backward compatibility)
+    const collectionProtocol = c.protocolType || 'http'
+    return collectionProtocol === activeProtocol.value
+  })
+})
+
+// Filter history by the active protocol (this will be used as base for other filters)
+const protocolFilteredHistory = computed(() => {
+  return history.value.filter((item: HistoryItem) => {
+    // Get protocol from the request, default to 'http'
+    const itemProtocol = item.request?.protocol || 'http'
+    return itemProtocol === activeProtocol.value
+  })
+})
+
 const createCollection = () => {
   if (newCollectionName.value.trim()) {
     store.addCollection(newCollectionName.value.trim())
@@ -669,12 +696,16 @@ const toggleHistoryGroup = (group: string) => {
 
 const isHistoryGroupCollapsed = (group: string) => collapsedHistoryGroups.value.has(group)
 
-// Filter history items based on search query
+// Filter history items based on protocol and search query
 const filteredHistory = computed(() => {
-  if (!historySearchQuery.value.trim()) return history.value
+  // First filter by protocol
+  const protocolFiltered = protocolFilteredHistory.value
+  
+  // Then filter by search query if present
+  if (!historySearchQuery.value.trim()) return protocolFiltered
   
   const query = historySearchQuery.value.toLowerCase()
-  return history.value.filter(item => {
+  return protocolFiltered.filter(item => {
     const url = getRequestUrl(item.request).toLowerCase()
     const method = item.request.method?.toLowerCase() || ''
     const name = item.request.name?.toLowerCase() || ''
@@ -810,13 +841,16 @@ const getResponseStatus = (item: HistoryItem): { status: number | null; success:
           <div v-if="history.length === 0" class="p-4 text-center text-base text-muted-foreground">
             No history yet
           </div>
+          <div v-else-if="protocolFilteredHistory.length === 0" class="p-4 text-center text-base text-muted-foreground">
+            No {{ activeProtocol.toUpperCase() }} requests in history
+          </div>
           <div v-else-if="filteredHistory.length === 0" class="p-4 text-center text-base text-muted-foreground">
             No matching requests
           </div>
           <div v-else class="space-y-1 flex-1 overflow-y-auto">
             <div class="flex items-center justify-between px-2 py-1 mb-2">
               <span class="text-sm text-muted-foreground">
-                {{ filteredHistory.length }}{{ filteredHistory.length !== history.length ? ` / ${history.length}` : '' }} requests
+                {{ filteredHistory.length }}{{ filteredHistory.length !== protocolFilteredHistory.length ? ` / ${protocolFilteredHistory.length}` : '' }} requests
               </span>
               <button
                 class="text-sm text-muted-foreground hover:text-destructive"
@@ -1011,7 +1045,7 @@ const getResponseStatus = (item: HistoryItem): { status: number | null; success:
           </div>
           <div v-else class="space-y-2">
             <div
-              v-for="collection in collections"
+              v-for="collection in filteredCollections"
               :key="collection.id"
               class="rounded-md border border-border"
             >
@@ -1272,7 +1306,7 @@ const getResponseStatus = (item: HistoryItem): { status: number | null; success:
             
             <div v-else class="space-y-1">
               <div
-                v-for="collection in collections"
+                v-for="collection in filteredCollections"
                 :key="collection.id"
                 class="rounded-md"
               >

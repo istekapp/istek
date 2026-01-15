@@ -8,7 +8,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 use std::sync::Arc;
 
-use crate::database::Database;
+use crate::storage::{Storage, Variable};
 use super::{ApiError, PaginatedResponse, PaginationQuery, SuccessResponse};
 
 // Request/Response types
@@ -24,6 +24,20 @@ pub struct VariableResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret_provider: Option<Value>,
     pub enabled: bool,
+}
+
+impl From<Variable> for VariableResponse {
+    fn from(v: Variable) -> Self {
+        VariableResponse {
+            id: v.id,
+            key: v.key,
+            value: v.value,
+            description: v.description,
+            is_secret: v.is_secret,
+            secret_provider: v.secret_provider,
+            enabled: v.enabled,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -78,42 +92,22 @@ pub struct UpdateVariableRequest {
     tag = "Variables"
 )]
 pub async fn list_variables(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path(workspace_id): Path<String>,
     Query(pagination): Query<PaginationQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let variables = storage.get_global_variables(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    // Get total count for this workspace
-    let total: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM global_variables WHERE workspace_id = ?1",
-            [&workspace_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let total = variables.len() as i64;
+    let start = pagination.offset as usize;
+    let end = std::cmp::min(start + pagination.limit as usize, variables.len());
     
-    // Get paginated items
-    let mut stmt = conn
-        .prepare("SELECT id, key, value, description, is_secret, secret_provider, enabled FROM global_variables WHERE workspace_id = ?1 LIMIT ?2 OFFSET ?3")
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    let items: Vec<VariableResponse> = stmt
-        .query_map(rusqlite::params![workspace_id, pagination.limit, pagination.offset], |row| {
-            let secret_provider_str: Option<String> = row.get(5)?;
-            
-            Ok(VariableResponse {
-                id: row.get(0)?,
-                key: row.get(1)?,
-                value: row.get(2)?,
-                description: row.get(3)?,
-                is_secret: row.get::<_, i32>(4)? != 0,
-                secret_provider: secret_provider_str.and_then(|s| serde_json::from_str(&s).ok()),
-                enabled: row.get::<_, i32>(6)? != 0,
-            })
-        })
-        .map_err(|e| ApiError::internal_error(e.to_string()))?
-        .filter_map(|r| r.ok())
+    let items: Vec<VariableResponse> = variables
+        .into_iter()
+        .skip(start)
+        .take(end - start)
+        .map(VariableResponse::from)
         .collect();
     
     Ok(Json(PaginatedResponse {
@@ -139,19 +133,24 @@ pub async fn list_variables(
     tag = "Variables"
 )]
 pub async fn create_variable(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path(workspace_id): Path<String>,
     Json(req): Json<CreateVariableRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
     let id = uuid::Uuid::new_v4().to_string();
-    let secret_provider_str = req.secret_provider.as_ref().map(|sp| serde_json::to_string(sp).unwrap_or_default());
     
-    conn.execute(
-        "INSERT INTO global_variables (id, key, value, description, is_secret, secret_provider, enabled, workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        rusqlite::params![id, req.key, req.value, req.description, req.is_secret as i32, secret_provider_str, req.enabled as i32, workspace_id],
-    ).map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let variable = Variable {
+        id: id.clone(),
+        key: req.key.clone(),
+        value: req.value.clone(),
+        description: req.description.clone(),
+        is_secret: req.is_secret,
+        secret_provider: req.secret_provider.clone(),
+        enabled: req.enabled,
+    };
+    
+    storage.save_global_variable(&workspace_id, &variable)
+        .map_err(|e| ApiError::internal_error(e))?;
     
     Ok((
         axum::http::StatusCode::CREATED,
@@ -183,32 +182,16 @@ pub async fn create_variable(
     tag = "Variables"
 )]
 pub async fn update_variable(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((workspace_id, variable_id)): Path<(String, String)>,
     Json(req): Json<UpdateVariableRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let variables = storage.get_global_variables(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    // Get existing variable
-    let mut variable = conn
-        .query_row(
-            "SELECT id, key, value, description, is_secret, secret_provider, enabled FROM global_variables WHERE id = ?1 AND workspace_id = ?2",
-            rusqlite::params![variable_id, workspace_id],
-            |row| {
-                let secret_provider_str: Option<String> = row.get(5)?;
-                
-                Ok(VariableResponse {
-                    id: row.get(0)?,
-                    key: row.get(1)?,
-                    value: row.get(2)?,
-                    description: row.get(3)?,
-                    is_secret: row.get::<_, i32>(4)? != 0,
-                    secret_provider: secret_provider_str.and_then(|s| serde_json::from_str(&s).ok()),
-                    enabled: row.get::<_, i32>(6)? != 0,
-                })
-            },
-        )
-        .map_err(|_| ApiError::not_found("Variable not found"))?;
+    let mut variable = variables.into_iter()
+        .find(|v| v.id == variable_id)
+        .ok_or_else(|| ApiError::not_found("Variable not found"))?;
     
     // Apply updates
     if let Some(key) = req.key {
@@ -230,14 +213,10 @@ pub async fn update_variable(
         variable.enabled = enabled;
     }
     
-    let secret_provider_str = variable.secret_provider.as_ref().map(|sp| serde_json::to_string(sp).unwrap_or_default());
+    storage.save_global_variable(&workspace_id, &variable)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    conn.execute(
-        "UPDATE global_variables SET key = ?1, value = ?2, description = ?3, is_secret = ?4, secret_provider = ?5, enabled = ?6 WHERE id = ?7 AND workspace_id = ?8",
-        rusqlite::params![variable.key, variable.value, variable.description, variable.is_secret as i32, secret_provider_str, variable.enabled as i32, variable_id, workspace_id],
-    ).map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    Ok(Json(variable))
+    Ok(Json(VariableResponse::from(variable)))
 }
 
 /// Delete a global variable
@@ -255,21 +234,18 @@ pub async fn update_variable(
     tag = "Variables"
 )]
 pub async fn delete_variable(
-    State(db): State<Arc<Database>>,
+    State(storage): State<Arc<Storage>>,
     Path((workspace_id, variable_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conn = db.conn.lock().map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let variables = storage.get_global_variables(&workspace_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
-    let affected = conn
-        .execute(
-            "DELETE FROM global_variables WHERE id = ?1 AND workspace_id = ?2",
-            rusqlite::params![variable_id, workspace_id],
-        )
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-    
-    if affected == 0 {
+    if !variables.iter().any(|v| v.id == variable_id) {
         return Err(ApiError::not_found("Variable not found"));
     }
+    
+    storage.delete_global_variable(&workspace_id, &variable_id)
+        .map_err(|e| ApiError::internal_error(e))?;
     
     Ok(Json(SuccessResponse::ok()))
 }

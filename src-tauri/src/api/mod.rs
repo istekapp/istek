@@ -5,6 +5,7 @@ pub mod environments;
 pub mod variables;
 pub mod integrations;
 pub mod history;
+pub mod tests;
 
 use axum::{
     http::StatusCode,

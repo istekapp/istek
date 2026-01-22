@@ -37,7 +37,13 @@ const fileTree = computed(() => {
   const tree: Map<string, FileTreeNode> = new Map()
   
   for (const file of uncommittedChanges.value) {
-    const parts = file.path.split('/')
+    // Skip empty paths and filter out trailing slashes
+    const cleanPath = file.path.replace(/\/+$/, '')
+    if (!cleanPath) continue
+    
+    const parts = cleanPath.split('/').filter(p => p.length > 0)
+    if (parts.length === 0) continue
+    
     let currentPath = ''
     
     for (let i = 0; i < parts.length; i++) {

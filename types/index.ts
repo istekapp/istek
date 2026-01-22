@@ -59,6 +59,13 @@ export interface HttpRequest {
   preRequestScript?: string
   /** Post-request script (JavaScript) */
   postRequestScript?: string
+  /** Order for test execution (lower numbers run first) */
+  testOrder?: number
+  /** Test configuration: assertions and variable extractions */
+  testConfig?: {
+    assertions: Assertion[]
+    extractVariables: VariableExtraction[]
+  }
 }
 
 export interface HttpResponse {
@@ -79,6 +86,8 @@ export interface WebSocketRequest {
   headers: KeyValue[]
   message: string
   messageType: 'text' | 'binary'
+  /** Order for test execution (lower numbers run first) */
+  testOrder?: number
 }
 
 export interface WebSocketMessage {
@@ -105,6 +114,8 @@ export interface GraphQLRequest {
   query: string
   variables: string
   operationName: string
+  /** Order for test execution (lower numbers run first) */
+  testOrder?: number
 }
 
 export interface GraphQLResponse {
@@ -124,6 +135,8 @@ export interface GrpcRequest {
   protoFile: string
   message: string
   metadata: KeyValue[]
+  /** Order for test execution (lower numbers run first) */
+  testOrder?: number
 }
 
 export interface GrpcResponse {
@@ -149,6 +162,8 @@ export interface MqttRequest {
   qos: 0 | 1 | 2
   retain: boolean
   useTls: boolean
+  /** Order for test execution (lower numbers run first) */
+  testOrder?: number
 }
 
 export interface MqttMessage {
@@ -178,6 +193,8 @@ export interface UnixSocketRequest {
   path: string
   headers: KeyValue[]
   body: string
+  /** Order for test execution (lower numbers run first) */
+  testOrder?: number
 }
 
 // ============ SSE (Server-Sent Events) ============
@@ -188,6 +205,8 @@ export interface SseRequest {
   url: string
   headers: KeyValue[]
   withCredentials: boolean
+  /** Order for test execution (lower numbers run first) */
+  testOrder?: number
 }
 
 export interface SseEvent {
@@ -223,6 +242,8 @@ export interface McpRequest {
   // Selected tool to call
   selectedTool?: string
   toolInput: string // JSON input for the tool
+  /** Order for test execution (lower numbers run first) */
+  testOrder?: number
 }
 
 export interface McpTool {
@@ -445,6 +466,7 @@ export interface RequestTab {
   // Source tracking - where this request came from
   sourceCollectionId?: string
   sourceRequestId?: string
+  sourceHistoryId?: string
   // Protocol specific states
   wsState?: WebSocketState
   mqttState?: MqttState
@@ -480,6 +502,7 @@ export interface PlaygroundStatus {
   unixSocket: string | null
   openapiUrl: string | null
   sseUrl: string | null
+  echoUrl: string | null
 }
 
 export type Tab = RequestTab | TestTab | MockTab
@@ -661,14 +684,14 @@ export interface FetchSecretsResult {
 }
 
 // ============ Variables & Environments ============
-export type SecretProviderType = 'manual' | 'vault' | '1password' | 'bitwarden' | 'aws' | 'gcp' | 'azure'
+export type SecretProviderType = 'manual' | 'vault' | 'bitwarden' | 'aws' | 'gcp' | 'azure'
 
 export interface SecretProviderConfig {
   id: string
   name: string
   type: SecretProviderType
   enabled: boolean
-  config: VaultConfig | OnePasswordConfig | BitwardenConfig | AwsConfig | GcpConfig | AzureConfig | null
+  config: VaultConfig | BitwardenConfig | AwsConfig | GcpConfig | AzureConfig | null
   createdAt: number
 }
 
@@ -678,11 +701,6 @@ export interface VaultConfig {
   token: string
   namespace?: string
   mountPath: string  // e.g., "secret" or "kv"
-}
-
-export interface OnePasswordConfig {
-  serviceAccountToken: string
-  vaultId: string
 }
 
 export interface BitwardenConfig {
@@ -721,7 +739,7 @@ export interface Variable {
     // Path to the secret (format depends on provider):
     // - Vault: "data/myapp/config" -> key "password"
     // - AWS: "myapp/production" -> key "db_password"  
-    // - 1Password: item reference
+    // - Bitwarden: secret name
     // - etc.
     secretPath: string
     secretKey: string  // The key within the secret (for JSON secrets)
@@ -735,7 +753,6 @@ export interface Environment {
   color: string
   variables: Variable[]
   isDefault?: boolean
-  shareable?: boolean  // If true, this environment will be synced to Git
   createdAt: number
 }
 
@@ -753,25 +770,6 @@ export interface VariableScope {
 export interface SyncConfig {
   enabled: boolean
   syncPath: string
-  syncCollections: boolean
-  syncEnvironments: boolean
-  syncGlobalVariables: boolean
-}
-
-export interface SyncChange {
-  changeType: 'added' | 'modified' | 'deleted'
-  resourceType: 'collection' | 'environment' | 'global_variable'
-  resourceId: string
-  resourceName: string
-  source: 'local' | 'external'
-}
-
-export interface SyncStatus {
-  isInitialized: boolean
-  syncPath: string
-  localChanges: SyncChange[]
-  externalChanges: SyncChange[]
-  lastSync: number | null
 }
 
 export interface GitFileChange {

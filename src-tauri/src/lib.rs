@@ -20,6 +20,7 @@ mod git_export;
 mod sync;
 mod api;
 mod api_server;
+mod update_checker;
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
@@ -33,7 +34,11 @@ pub static MQTT_CONNECTIONS: Lazy<DashMap<String, mqtt::MqttConnection>> = Lazy:
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_log::Builder::default().build())
+        .plugin(
+            tauri_plugin_log::Builder::default()
+                .level(log::LevelFilter::Warn)
+                .build()
+        )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -53,6 +58,21 @@ pub fn run() {
             
             // Manage the Arc<Storage>
             app.manage(storage_arc);
+            
+            // Initialize update checker
+            app.manage(update_checker::UpdateChecker::new());
+            
+            // Start periodic update check (after 30 seconds, then every 4 hours)
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                // Wait 30 seconds before first check
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+                
+                let checker = app_handle.state::<update_checker::UpdateChecker>();
+                if let Err(e) = checker.check_and_notify(&app_handle).await {
+                    log::warn!("Initial update check failed: {}", e);
+                }
+            });
             
             Ok(())
         })
@@ -120,6 +140,11 @@ pub fn run() {
             storage_commands::load_test_runs,
             storage_commands::delete_test_run,
             storage_commands::clear_test_runs,
+            // Storage - Sensitive Values
+            storage_commands::get_sensitive_values,
+            storage_commands::get_sensitive_value,
+            storage_commands::save_sensitive_value,
+            storage_commands::delete_sensitive_value,
             // Storage - Utility
             storage_commands::get_config_dir,
             // Import
@@ -187,40 +212,42 @@ pub fn run() {
             template_functions::random_float,
             template_functions::random_string,
             template_functions::random_hex,
+            // Template Functions - Sensitive (Workspace Encryption)
+            template_functions::sensitive_generate_master_key,
+            template_functions::sensitive_store_master_key,
+            template_functions::sensitive_check_encryption_status,
+            template_functions::sensitive_delete_master_key,
+            template_functions::sensitive_encrypt,
+            template_functions::sensitive_decrypt,
             // Scripting
             scripting::run_pre_request_script,
             scripting::run_post_request_script,
             scripting::test_script,
-            // Git Export
+            // Git Export (legacy - kept for compatibility)
             git_export::export_collection_yaml,
             git_export::import_collection_yaml,
             git_export::export_all_collections_yaml,
-            // Sync
+            // Sync Config
             sync::sync_init,
             sync::sync_get_config,
             sync::sync_save_config,
-            sync::sync_get_status,
-            sync::sync_export_all,
-            sync::sync_export_collections,
-            sync::sync_export_environments,
-            sync::sync_export_global_variables,
-            sync::sync_import_all,
-            sync::sync_import_collections,
-            sync::sync_import_environments,
-            sync::sync_import_global_variables,
             // Git Operations
             sync::git_init,
             sync::git_get_status,
-            sync::git_commit,
-            sync::git_pull,
-            sync::git_push,
-            sync::git_add_remote,
             sync::git_get_log,
+            sync::git_commit,
+            sync::git_push,
+            sync::git_pull,
+            sync::git_add_remote,
             sync::git_list_branches,
             sync::git_create_branch,
             sync::git_switch_branch,
             sync::git_get_commit_files,
             sync::git_get_file_diff,
+            // Update Checker
+            update_checker::check_for_update,
+            update_checker::get_app_version,
+            update_checker::dismiss_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

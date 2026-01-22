@@ -47,7 +47,8 @@ export const useVariableStore = () => {
   // UI State
   const showVariableManager = useState<boolean>('showVariableManager', () => false)
   const showIntegrations = useState<boolean>('showIntegrations', () => false)
-  const variableManagerTab = useState<'general' | 'variables' | 'environments' | 'integrations'>('variableManagerTab', () => 'general')
+  const variableManagerTab = useState<'general' | 'variables' | 'environments' | 'integrations' | 'playground' | 'api'>('variableManagerTab', () => 'general')
+  const focusVariableName = useState<string | null>('focusVariableName', () => null)
   
   // Settings State
   const appTheme = useState<'dark' | 'light' | 'system'>('appTheme', () => 'dark')
@@ -65,13 +66,73 @@ export const useVariableStore = () => {
   
   // Resolved secret values (variableId -> fetched value)
   const resolvedSecretValues = useState<Map<string, string>>('resolvedSecretValues', () => new Map())
+  
+  // Cache for decrypted sensitive values (variableId -> decrypted value)
+  const decryptedSensitiveCache = useState<Map<string, string>>('decryptedSensitiveCache', () => new Map())
+  
+  // Track which sensitive values are being decrypted
+  const decryptingVariables = useState<Set<string>>('decryptingVariables', () => new Set())
 
   // Computed
   const activeEnvironment = computed(() =>
     environments.value.find(e => e.id === activeEnvironmentId.value) || null
   )
+  
+  // Get current workspace ID for encryption
+  const getCurrentWorkspaceId = (): string => {
+    const workspaceStore = useWorkspaceStore()
+    return workspaceStore.activeWorkspace.value?.id || 'default'
+  }
+  
+  // Decrypt a sensitive variable value
+  const decryptSensitiveValue = async (variable: Variable): Promise<string | null> => {
+    if (!variable.isSecret || !variable.value) return variable.value
+    
+    // Check cache first
+    if (decryptedSensitiveCache.value.has(variable.id)) {
+      return decryptedSensitiveCache.value.get(variable.id)!
+    }
+    
+    // Avoid duplicate decryption requests
+    if (decryptingVariables.value.has(variable.id)) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      return decryptedSensitiveCache.value.get(variable.id) || null
+    }
+    
+    decryptingVariables.value.add(variable.id)
+    
+    try {
+      const workspaceId = getCurrentWorkspaceId()
+      const decrypted = await invoke<string>('sensitive_decrypt', {
+        workspaceId,
+        key: variable.key,
+        encryptedValue: variable.value
+      })
+      
+      decryptedSensitiveCache.value.set(variable.id, decrypted)
+      return decrypted
+    } catch (e) {
+      console.error(`Failed to decrypt sensitive variable "${variable.key}":`, e)
+      // Return the encrypted value as fallback (won't work but shows there's an issue)
+      return null
+    } finally {
+      decryptingVariables.value.delete(variable.id)
+    }
+  }
+  
+  // Encrypt a sensitive variable value before saving
+  const encryptSensitiveValue = async (key: string, plainValue: string): Promise<string> => {
+    const workspaceId = getCurrentWorkspaceId()
+    return await invoke<string>('sensitive_encrypt', {
+      workspaceId,
+      key,
+      value: plainValue
+    })
+  }
 
   // Get all resolved variables (global + environment overrides)
+  // Note: Sensitive values are stored encrypted, this returns them as-is
+  // Use interpolateAsync to get decrypted values at runtime
   const resolvedVariables = computed(() => {
     const vars = new Map<string, Variable>()
     
@@ -81,6 +142,9 @@ export const useVariableStore = () => {
         // If variable has a secret provider and we have a cached value, use it
         if (v.secretProvider && resolvedSecretValues.value.has(v.id)) {
           vars.set(v.key, { ...v, value: resolvedSecretValues.value.get(v.id)! })
+        } else if (v.isSecret && decryptedSensitiveCache.value.has(v.id)) {
+          // Use cached decrypted value for sensitive variables
+          vars.set(v.key, { ...v, value: decryptedSensitiveCache.value.get(v.id)! })
         } else {
           vars.set(v.key, v)
         }
@@ -93,6 +157,8 @@ export const useVariableStore = () => {
         if (v.enabled && v.key) {
           if (v.secretProvider && resolvedSecretValues.value.has(v.id)) {
             vars.set(v.key, { ...v, value: resolvedSecretValues.value.get(v.id)! })
+          } else if (v.isSecret && decryptedSensitiveCache.value.has(v.id)) {
+            vars.set(v.key, { ...v, value: decryptedSensitiveCache.value.get(v.id)! })
           } else {
             vars.set(v.key, v)
           }
@@ -108,7 +174,14 @@ export const useVariableStore = () => {
     if (!variable.secretProvider) return null
     
     const provider = secretProviders.value.find(p => p.id === variable.secretProvider!.providerId)
-    if (!provider || !provider.enabled) return null
+    if (!provider) {
+      console.warn(`Secret provider not found for variable "${variable.key}". The provider may need to be configured in Settings > Integrations.`)
+      return null
+    }
+    if (!provider.enabled) {
+      console.warn(`Secret provider "${provider.name}" is disabled for variable "${variable.key}".`)
+      return null
+    }
     
     const cacheKey = `${provider.id}:${variable.secretProvider.secretPath}:${variable.secretProvider.secretKey}`
     
@@ -193,12 +266,6 @@ export const useVariableStore = () => {
           vaultMountPath: config.mountPath,
           vaultNamespace: config.namespace,
           vaultSecretPath: secretPath,
-        }
-      case '1password':
-        return {
-          onepasswordServiceAccountToken: config.serviceAccountToken,
-          onepasswordVaultId: config.vaultId,
-          onepasswordItemName: secretPath,
         }
       case 'bitwarden':
         return {
@@ -303,10 +370,17 @@ export const useVariableStore = () => {
           return await invoke<string>('decode_url', { input: parsedArgs[0] || '' })
         }
         
-        // Encryption (keychain) functions
-        case 'encrypt': {
-          // encrypt(key) - retrieves value from keychain
-          return await invoke<string>('encrypt_retrieve', { key: parsedArgs[0] || '' })
+        // DEPRECATED: $sensitive() template function
+        // Use the "Sensitive" checkbox in Variables settings instead
+        // This will just return the value as-is for backward compatibility
+        case 'sensitive': {
+          const plainValue = parsedArgs[0] || ''
+          if (!plainValue) {
+            return '{{ERROR: sensitive() is deprecated. Use the Sensitive checkbox in Settings > Variables}}'
+          }
+          // Return the plain value - users should migrate to the Variables Sensitive checkbox
+          console.warn('$sensitive() template function is deprecated. Use the Sensitive checkbox in Settings > Variables instead.')
+          return plainValue
         }
         
         // Utility functions
@@ -369,7 +443,7 @@ export const useVariableStore = () => {
     return result
   }
   
-  // Async interpolation that handles template functions and fetches secrets
+  // Async interpolation that handles template functions, fetches secrets, and decrypts sensitive values
   const interpolateAsync = async (text: string): Promise<string> => {
     if (!text) return text
     
@@ -383,13 +457,25 @@ export const useVariableStore = () => {
       ]
       const variable = allVariables.find(v => v.key === varName && v.enabled)
       
+      if (!variable) continue
+      
       // If variable has a secret provider and we don't have a cached value, fetch it
-      if (variable?.secretProvider && !resolvedSecretValues.value.has(variable.id)) {
+      if (variable.secretProvider && !resolvedSecretValues.value.has(variable.id)) {
         const value = await fetchSecretValue(variable)
         if (value !== null) {
           resolvedSecretValues.value.set(variable.id, value)
           // Trigger reactivity
           resolvedSecretValues.value = new Map(resolvedSecretValues.value)
+        }
+      }
+      
+      // If variable is sensitive (encrypted) and we don't have a decrypted cache, decrypt it
+      if (variable.isSecret && !variable.secretProvider && !decryptedSensitiveCache.value.has(variable.id)) {
+        const decrypted = await decryptSensitiveValue(variable)
+        if (decrypted !== null) {
+          decryptedSensitiveCache.value.set(variable.id, decrypted)
+          // Trigger reactivity
+          decryptedSensitiveCache.value = new Map(decryptedSensitiveCache.value)
         }
       }
     }
@@ -419,10 +505,39 @@ export const useVariableStore = () => {
     return matches.map(m => m.slice(2, -2).trim())
   }
 
+  // Template function names that are recognized
+  const knownTemplateFunctions = [
+    'hash.md5', 'hash.sha1', 'hash.sha256', 'hash.sha512',
+    'hmac.sha256', 'hmac.sha512',
+    'base64.encode', 'base64.decode', 'encode.base64', 'decode.base64',
+    'url.encode', 'url.decode', 'encode.url', 'decode.url',
+    'sensitive',
+    'uuid',
+    'timestamp', 'timestamp.ms',
+    'random.int', 'random.float', 'random.string', 'random.hex',
+  ]
+
+  // Check if a name is a template function call (e.g., "$hash.md5(...)" or "hash.md5(...)")
+  const isTemplateFunction = (name: string): boolean => {
+    // Remove leading $ if present
+    const cleanName = name.startsWith('$') ? name.slice(1) : name
+    // Extract function name (before the parenthesis)
+    const fnMatch = cleanName.match(/^([\w.]+)\s*\(/)
+    if (fnMatch) {
+      return knownTemplateFunctions.includes(fnMatch[1])
+    }
+    return false
+  }
+
   // Get unresolved variables in text
   const getUnresolvedVariables = (text: string): string[] => {
     const names = extractVariableNames(text)
-    return names.filter(name => !resolvedVariables.value.has(name))
+    return names.filter(name => {
+      // Skip if it's a known template function
+      if (isTemplateFunction(name)) return false
+      // Check if it's a resolved variable
+      return !resolvedVariables.value.has(name)
+    })
   }
 
   // ============ Global Variable Actions ============
@@ -439,8 +554,66 @@ export const useVariableStore = () => {
   }
 
   const updateGlobalVariable = async (id: string, updates: Partial<Variable>) => {
+    console.log('[VariableStore] updateGlobalVariable called:', { id, updates })
+    const existingVar = globalVariables.value.find(v => v.id === id)
+    if (!existingVar) {
+      console.log('[VariableStore] Variable not found:', id)
+      return
+    }
+    
+    let processedUpdates = { ...updates }
+    
+    // Handle sensitive value encryption
+    // If isSecret is being turned ON, encrypt the current or new value
+    if (updates.isSecret === true && !existingVar.isSecret) {
+      console.log('[VariableStore] Enabling sensitive for variable:', existingVar.key)
+      const valueToEncrypt = updates.value ?? existingVar.value
+      if (valueToEncrypt) {
+        try {
+          console.log('[VariableStore] Encrypting value...')
+          const encrypted = await encryptSensitiveValue(existingVar.key || updates.key || '', valueToEncrypt)
+          console.log('[VariableStore] Value encrypted successfully')
+          processedUpdates.value = encrypted
+          // Clear the decrypted cache for this variable
+          decryptedSensitiveCache.value.delete(id)
+        } catch (e) {
+          console.error('[VariableStore] Failed to encrypt sensitive value:', e)
+          // Don't update isSecret if encryption failed
+          delete processedUpdates.isSecret
+        }
+      }
+    }
+    // If isSecret is being turned OFF, decrypt and store plain value
+    else if (updates.isSecret === false && existingVar.isSecret) {
+      if (decryptedSensitiveCache.value.has(id)) {
+        processedUpdates.value = decryptedSensitiveCache.value.get(id)
+        decryptedSensitiveCache.value.delete(id)
+      } else {
+        // Try to decrypt the current value
+        try {
+          const decrypted = await decryptSensitiveValue(existingVar)
+          if (decrypted) {
+            processedUpdates.value = decrypted
+          }
+        } catch (e) {
+          console.error('Failed to decrypt sensitive value:', e)
+        }
+      }
+    }
+    // If updating value and it's already sensitive, encrypt the new value
+    else if (updates.value !== undefined && existingVar.isSecret && updates.isSecret !== false) {
+      try {
+        const encrypted = await encryptSensitiveValue(existingVar.key, updates.value)
+        processedUpdates.value = encrypted
+        // Update the decrypted cache with the new plain value
+        decryptedSensitiveCache.value.set(id, updates.value)
+      } catch (e) {
+        console.error('Failed to encrypt updated sensitive value:', e)
+      }
+    }
+    
     globalVariables.value = globalVariables.value.map(v =>
-      v.id === id ? { ...v, ...updates } : v
+      v.id === id ? { ...v, ...processedUpdates } : v
     )
     
     // Persist to database
@@ -455,11 +628,25 @@ export const useVariableStore = () => {
   }
 
   const deleteGlobalVariable = async (id: string) => {
+    // Find the variable before deleting to check if it's sensitive
+    const variable = globalVariables.value.find(v => v.id === id)
+    
     globalVariables.value = globalVariables.value.filter(v => v.id !== id)
     
     // Persist to database
     try {
       await invoke('delete_global_variable', { id })
+      
+      // If it was a sensitive variable, also delete from sensitive values storage
+      if (variable?.isSecret) {
+        const { removeSensitiveValue } = useWorkspaceEncryption()
+        try {
+          await removeSensitiveValue(id)
+          console.log('[VariableStore] Deleted sensitive value for variable:', id)
+        } catch (sensitiveError) {
+          console.error('[VariableStore] Failed to delete sensitive value:', sensitiveError)
+        }
+      }
     } catch (e) {
       console.error('Failed to delete global variable:', e)
     }
@@ -497,15 +684,19 @@ export const useVariableStore = () => {
   }
 
   const updateEnvironment = async (id: string, updates: Partial<Environment>) => {
+    console.log('[VariableStore] updateEnvironment called:', { id, updates })
     environments.value = environments.value.map(e =>
       e.id === id ? { ...e, ...updates } : e
     )
     
     // Persist to database
     const updated = environments.value.find(e => e.id === id)
+    console.log('[VariableStore] Updated environment:', updated)
     if (updated) {
       try {
+        console.log('[VariableStore] Calling save_environment...')
         await invoke('save_environment', { environment: updated })
+        console.log('[VariableStore] save_environment completed successfully')
       } catch (e) {
         console.error('Failed to update environment:', e)
       }
@@ -563,6 +754,7 @@ export const useVariableStore = () => {
 
   // ============ Environment Variable Actions ============
   const addEnvironmentVariable = async (envId: string, variable?: Partial<Variable>) => {
+    console.log('[VariableStore] addEnvironmentVariable called:', { envId, variable })
     environments.value = environments.value.map(e =>
       e.id === envId
         ? { ...e, variables: [...e.variables, createVariable(variable)] }
@@ -571,9 +763,17 @@ export const useVariableStore = () => {
     
     // Persist to database
     const updated = environments.value.find(e => e.id === envId)
+    console.log('[VariableStore] Environment after adding variable:', { 
+      id: updated?.id, 
+      name: updated?.name, 
+      shareable: updated?.shareable,
+      variablesCount: updated?.variables.length 
+    })
     if (updated) {
       try {
+        console.log('[VariableStore] Calling save_environment with shareable:', updated.shareable)
         await invoke('save_environment', { environment: updated })
+        console.log('[VariableStore] save_environment completed successfully')
       } catch (e) {
         console.error('Failed to save environment variable:', e)
       }
@@ -581,12 +781,60 @@ export const useVariableStore = () => {
   }
 
   const updateEnvironmentVariable = async (envId: string, varId: string, updates: Partial<Variable>) => {
+    const env = environments.value.find(e => e.id === envId)
+    const existingVar = env?.variables.find(v => v.id === varId)
+    if (!existingVar) return
+    
+    let processedUpdates = { ...updates }
+    
+    // Handle sensitive value encryption
+    // If isSecret is being turned ON, encrypt the current or new value
+    if (updates.isSecret === true && !existingVar.isSecret) {
+      const valueToEncrypt = updates.value ?? existingVar.value
+      if (valueToEncrypt) {
+        try {
+          const encrypted = await encryptSensitiveValue(existingVar.key || updates.key || '', valueToEncrypt)
+          processedUpdates.value = encrypted
+          decryptedSensitiveCache.value.delete(varId)
+        } catch (e) {
+          console.error('Failed to encrypt sensitive value:', e)
+          delete processedUpdates.isSecret
+        }
+      }
+    }
+    // If isSecret is being turned OFF, decrypt and store plain value
+    else if (updates.isSecret === false && existingVar.isSecret) {
+      if (decryptedSensitiveCache.value.has(varId)) {
+        processedUpdates.value = decryptedSensitiveCache.value.get(varId)
+        decryptedSensitiveCache.value.delete(varId)
+      } else {
+        try {
+          const decrypted = await decryptSensitiveValue(existingVar)
+          if (decrypted) {
+            processedUpdates.value = decrypted
+          }
+        } catch (e) {
+          console.error('Failed to decrypt sensitive value:', e)
+        }
+      }
+    }
+    // If updating value and it's already sensitive, encrypt the new value
+    else if (updates.value !== undefined && existingVar.isSecret && updates.isSecret !== false) {
+      try {
+        const encrypted = await encryptSensitiveValue(existingVar.key, updates.value)
+        processedUpdates.value = encrypted
+        decryptedSensitiveCache.value.set(varId, updates.value)
+      } catch (e) {
+        console.error('Failed to encrypt updated sensitive value:', e)
+      }
+    }
+    
     environments.value = environments.value.map(e =>
       e.id === envId
         ? {
             ...e,
             variables: e.variables.map(v =>
-              v.id === varId ? { ...v, ...updates } : v
+              v.id === varId ? { ...v, ...processedUpdates } : v
             ),
           }
         : e
@@ -604,6 +852,10 @@ export const useVariableStore = () => {
   }
 
   const deleteEnvironmentVariable = async (envId: string, varId: string) => {
+    // Find the variable before deleting to check if it's sensitive
+    const env = environments.value.find(e => e.id === envId)
+    const variable = env?.variables.find(v => v.id === varId)
+    
     environments.value = environments.value.map(e =>
       e.id === envId
         ? { ...e, variables: e.variables.filter(v => v.id !== varId) }
@@ -615,6 +867,17 @@ export const useVariableStore = () => {
     if (updated) {
       try {
         await invoke('save_environment', { environment: updated })
+        
+        // If it was a sensitive variable, also delete from sensitive values storage
+        if (variable?.isSecret) {
+          const { removeSensitiveValue } = useWorkspaceEncryption()
+          try {
+            await removeSensitiveValue(varId)
+            console.log('[VariableStore] Deleted sensitive value for env variable:', varId)
+          } catch (sensitiveError) {
+            console.error('[VariableStore] Failed to delete sensitive value:', sensitiveError)
+          }
+        }
       } catch (e) {
         console.error('Failed to delete environment variable:', e)
       }
@@ -656,10 +919,7 @@ export const useVariableStore = () => {
     // Persist to database
     try {
       await invoke('save_secret_provider', { 
-        provider: {
-          ...newProvider,
-          providerType: newProvider.type
-        }
+        provider: newProvider
       })
     } catch (e) {
       console.error('Failed to save secret provider:', e)
@@ -722,13 +982,19 @@ export const useVariableStore = () => {
   }
 
   // ============ UI Actions ============
-  const openVariableManager = (tab?: 'general' | 'variables' | 'environments' | 'integrations') => {
+  const openVariableManager = (tab?: 'general' | 'variables' | 'environments' | 'integrations' | 'playground' | 'api', focusVariable?: string) => {
     if (tab) variableManagerTab.value = tab
+    if (focusVariable) focusVariableName.value = focusVariable
     showVariableManager.value = true
   }
 
   const closeVariableManager = () => {
     showVariableManager.value = false
+    focusVariableName.value = null
+  }
+  
+  const clearFocusVariable = () => {
+    focusVariableName.value = null
   }
   
   // ============ Workspace Switch Actions ============
@@ -807,18 +1073,16 @@ export const useVariableStore = () => {
       }
       
       if (data.secretProviders.length > 0) {
-        // Map providerType back to type
-        console.log('=== DEBUG Loading secretProviders ===')
-        console.log('Raw data:', JSON.stringify(data.secretProviders, null, 2))
-        secretProviders.value = data.secretProviders.map(p => {
-          console.log('Provider p:', JSON.stringify(p, null, 2))
-          console.log('p.providerType:', p.providerType)
-          return {
-            ...p,
-            type: p.providerType as SecretProviderConfig['type']
-          }
-        })
-        console.log('Mapped secretProviders:', JSON.stringify(secretProviders.value, null, 2))
+        // Rust serializes provider_type as "type" due to #[serde(rename = "type")]
+        // But the raw response might have it as providerType due to camelCase rename_all
+        secretProviders.value = data.secretProviders.map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          type: p.type || p.providerType, // Handle both cases
+          enabled: p.enabled,
+          config: p.config,
+          createdAt: p.createdAt,
+        })) as SecretProviderConfig[]
       }
       
       if (data.activeEnvironmentId) {
@@ -874,6 +1138,11 @@ export const useVariableStore = () => {
     refreshSecretValues,
     clearSecretCache,
     
+    // Sensitive value utilities
+    decryptSensitiveValue,
+    encryptSensitiveValue,
+    decryptedSensitiveCache,
+    
     // Global variable actions
     addGlobalVariable,
     updateGlobalVariable,
@@ -902,6 +1171,8 @@ export const useVariableStore = () => {
     // UI actions
     openVariableManager,
     closeVariableManager,
+    focusVariableName,
+    clearFocusVariable,
     
     // Settings state
     appTheme,

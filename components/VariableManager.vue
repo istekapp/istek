@@ -13,6 +13,8 @@ const {
   variableManagerTab,
   resolvedVariables,
   appTheme,
+  focusVariableName,
+  clearFocusVariable,
 } = variableStore
 
 // Theme handling
@@ -33,15 +35,140 @@ const showNewEnvInput = ref(false)
 const editingEnvId = ref<string | null>(null)
 const editingEnvName = ref('')
 
+// Watch for focus variable name to scroll and focus
+watch(focusVariableName, async (varName) => {
+  if (varName) {
+    // Wait for DOM to update
+    await nextTick()
+    
+    // Find the variable by key
+    const variable = globalVariables.value.find(v => v.key === varName)
+    if (variable) {
+      // Small delay to ensure the panel is rendered
+      setTimeout(() => {
+        // Find the input by data attribute
+        const inputEl = document.querySelector(`[data-variable-value-id="${variable.id}"] input`) as HTMLInputElement
+        if (inputEl) {
+          // Scroll into view and focus
+          inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          inputEl.focus()
+        }
+        // Clear the focus variable after focusing
+        clearFocusVariable()
+      }, 100)
+    }
+  }
+}, { immediate: true })
+
 // Secret provider form
 const showProviderForm = ref(false)
 const providerFormType = ref<SecretProviderType>('vault')
 const providerFormName = ref('')
 const providerFormConfig = ref<any>({})
 
+// Provider type options for select dropdown
+const providerTypeOptions = [
+  { value: 'vault', label: 'HashiCorp Vault', icon: 'simple-icons:vault' },
+  { value: 'bitwarden', label: 'Bitwarden', icon: 'simple-icons:bitwarden' },
+  { value: 'aws', label: 'AWS Secrets Manager', icon: 'simple-icons:amazonaws' },
+  { value: 'gcp', label: 'GCP Secret Manager', icon: 'simple-icons:googlecloud' },
+  { value: 'azure', label: 'Azure Key Vault', icon: 'simple-icons:microsoftazure' },
+]
+
 // Test state for variables
 const testingVariableId = ref<string | null>(null)
 const variableTestResults = ref<Map<string, { success: boolean; message: string }>>(new Map())
+
+// Sensitive variable state
+const revealedVariableId = ref<string | null>(null)
+const encryption = useWorkspaceEncryption()
+
+// Handle sensitive toggle - show master key setup if needed
+const handleSensitiveToggle = async (variable: Variable) => {
+  const newIsSecret = !variable.isSecret
+  console.log('[VariableManager] handleSensitiveToggle called', { variableId: variable.id, newIsSecret })
+  
+  if (newIsSecret) {
+    // Enabling sensitive - check if encryption is set up
+    let isEnabled = encryption.isEncryptionEnabled.value
+    console.log('[VariableManager] Cached isEncryptionEnabled:', isEnabled)
+    
+    if (!isEnabled) {
+      isEnabled = await encryption.checkEncryptionStatus()
+      console.log('[VariableManager] checkEncryptionStatus returned:', isEnabled)
+    }
+    
+    if (!isEnabled) {
+      console.log('[VariableManager] Encryption not enabled, showing setup dialog')
+      // Show master key setup dialog
+      encryption.showMasterKeySetup.value = true
+      // Store pending action info
+      encryption.pendingSensitiveAction.value = { key: variable.id, value: variable.value }
+      // Set callback to execute after encryption is enabled
+      encryption.onEncryptionEnabledCallback.value = async () => {
+        console.log('[VariableManager] Callback executing - updating variable to sensitive:', variable.id)
+        await variableStore.updateGlobalVariable(variable.id, { isSecret: true })
+        console.log('[VariableManager] Variable updated to sensitive successfully')
+        if (revealedVariableId.value === variable.id) {
+          revealedVariableId.value = null
+        }
+      }
+      return
+    }
+    console.log('[VariableManager] Encryption is enabled, proceeding with toggle')
+  }
+  
+  // Toggle the sensitive flag
+  console.log('[VariableManager] Calling updateGlobalVariable with isSecret:', newIsSecret)
+  await variableStore.updateGlobalVariable(variable.id, { isSecret: newIsSecret })
+  
+  // Hide revealed value when making sensitive
+  if (newIsSecret && revealedVariableId.value === variable.id) {
+    revealedVariableId.value = null
+  }
+}
+
+// Handle variable value change
+const handleVariableValueChange = (variableId: string, value: string) => {
+  variableStore.updateGlobalVariable(variableId, { value })
+}
+
+// Handle sensitive toggle for environment variables
+const handleEnvSensitiveToggle = async (envId: string, variable: Variable) => {
+  const newIsSecret = !variable.isSecret
+  
+  if (newIsSecret) {
+    // Enabling sensitive - check if encryption is set up
+    let isEnabled = encryption.isEncryptionEnabled.value
+    if (!isEnabled) {
+      isEnabled = await encryption.checkEncryptionStatus()
+    }
+    
+    if (!isEnabled) {
+      // Show master key setup dialog
+      encryption.showMasterKeySetup.value = true
+      encryption.pendingSensitiveAction.value = { key: variable.id, value: variable.value }
+      // Set callback to execute after encryption is enabled
+      encryption.onEncryptionEnabledCallback.value = async () => {
+        console.log('[VariableManager] Callback executing - updating env variable to sensitive:', variable.id)
+        await variableStore.updateEnvironmentVariable(envId, variable.id, { isSecret: true })
+        console.log('[VariableManager] Env variable updated to sensitive successfully')
+        if (revealedVariableId.value === variable.id) {
+          revealedVariableId.value = null
+        }
+      }
+      return
+    }
+  }
+  
+  // Toggle the sensitive flag
+  await variableStore.updateEnvironmentVariable(envId, variable.id, { isSecret: newIsSecret })
+  
+  // Hide revealed value when making sensitive
+  if (newIsSecret && revealedVariableId.value === variable.id) {
+    revealedVariableId.value = null
+  }
+}
 
 // Test state for integrations  
 const testingProviderId = ref<string | null>(null)
@@ -100,14 +227,15 @@ const playgroundEndpoints = computed(() => {
   if (!playgroundStatus.value?.running) return []
   
   return [
-    { name: 'HTTP API', url: playgroundStatus.value.httpUrl, icon: 'lucide:globe', color: 'text-blue-500', bgColor: 'bg-blue-500/10' },
-    { name: 'WebSocket', url: playgroundStatus.value.wsUrl, icon: 'lucide:radio', color: 'text-green-500', bgColor: 'bg-green-500/10' },
-    { name: 'GraphQL', url: playgroundStatus.value.graphqlUrl, icon: 'lucide:hexagon', color: 'text-pink-500', bgColor: 'bg-pink-500/10' },
-    { name: 'SSE', url: playgroundStatus.value.sseUrl, icon: 'lucide:activity', color: 'text-orange-400', bgColor: 'bg-orange-500/10' },
-    { name: 'MQTT', url: playgroundStatus.value.mqttUrl, icon: 'lucide:radio-tower', color: 'text-purple-500', bgColor: 'bg-purple-500/10' },
-    { name: 'gRPC', url: playgroundStatus.value.grpcUrl, icon: 'lucide:cpu', color: 'text-amber-500', bgColor: 'bg-amber-500/10' },
-    { name: 'Unix Socket', url: playgroundStatus.value.unixSocket, icon: 'lucide:plug', color: 'text-gray-500', bgColor: 'bg-gray-500/10' },
-    { name: 'OpenAPI Spec', url: playgroundStatus.value.openapiUrl, icon: 'lucide:file-json', color: 'text-cyan-500', bgColor: 'bg-cyan-500/10' },
+    { name: 'Echo', url: playgroundStatus.value.echoUrl, icon: 'lucide:repeat', color: 'text-emerald-500', bgColor: 'bg-emerald-500/10', description: 'Returns request details (any method)' },
+    { name: 'HTTP API', url: playgroundStatus.value.httpUrl, icon: 'lucide:globe', color: 'text-blue-500', bgColor: 'bg-blue-500/10', description: 'REST API for products' },
+    { name: 'WebSocket', url: playgroundStatus.value.wsUrl, icon: 'lucide:radio', color: 'text-green-500', bgColor: 'bg-green-500/10', description: 'Echo WebSocket server' },
+    { name: 'GraphQL', url: playgroundStatus.value.graphqlUrl, icon: 'lucide:hexagon', color: 'text-pink-500', bgColor: 'bg-pink-500/10', description: 'GraphQL API for users' },
+    { name: 'SSE', url: playgroundStatus.value.sseUrl, icon: 'lucide:activity', color: 'text-orange-400', bgColor: 'bg-orange-500/10', description: 'Server-Sent Events' },
+    { name: 'MQTT', url: playgroundStatus.value.mqttUrl, icon: 'lucide:radio-tower', color: 'text-purple-500', bgColor: 'bg-purple-500/10', description: 'MQTT broker' },
+    { name: 'gRPC', url: playgroundStatus.value.grpcUrl, icon: 'lucide:cpu', color: 'text-amber-500', bgColor: 'bg-amber-500/10', description: 'gRPC with reflection' },
+    { name: 'Unix Socket', url: playgroundStatus.value.unixSocket, icon: 'lucide:plug', color: 'text-gray-500', bgColor: 'bg-gray-500/10', description: 'Unix socket server' },
+    { name: 'OpenAPI Spec', url: playgroundStatus.value.openapiUrl, icon: 'lucide:file-json', color: 'text-cyan-500', bgColor: 'bg-cyan-500/10', description: 'OpenAPI specification' },
   ].filter(e => e.url)
 })
 
@@ -204,21 +332,6 @@ const saveEnvName = () => {
   editingEnvName.value = ''
 }
 
-// Handle shareable toggle for Git Sync
-const syncStore = useSyncStore()
-const handleShareableChange = async (envId: string, shareable: boolean) => {
-  try {
-    await syncStore.setEnvironmentShareable(envId, shareable)
-    // Update local state
-    const env = environments.value.find(e => e.id === envId)
-    if (env) {
-      variableStore.updateEnvironment(envId, { shareable })
-    }
-  } catch (e) {
-    console.error('Failed to update shareable status:', e)
-  }
-}
-
 // Provider form
 const resetProviderForm = () => {
   providerFormType.value = 'vault'
@@ -239,32 +352,45 @@ const saveProvider = () => {
   resetProviderForm()
 }
 
-const getProviderIcon = (type: SecretProviderType) => {
-  switch (type) {
-    case 'vault': return 'lucide:vault'
-    case '1password': return 'lucide:key-round'
-    case 'bitwarden': return 'lucide:shield'
-    case 'aws': return 'logos:aws'
-    case 'gcp': return 'logos:google-cloud'
-    case 'azure': return 'logos:microsoft-azure'
-    default: return 'lucide:variable'
-  }
+const getProviderLabel = (type: SecretProviderType) => {
+  const option = providerTypeOptions.find(o => o.value === type)
+  return option?.label || 'Manual'
 }
 
-const getProviderLabel = (type: SecretProviderType) => {
-  switch (type) {
-    case 'vault': return 'HashiCorp Vault'
-    case '1password': return '1Password'
-    case 'bitwarden': return 'Bitwarden'
-    case 'aws': return 'AWS Secrets Manager'
-    case 'gcp': return 'GCP Secret Manager'
-    case 'azure': return 'Azure Key Vault'
-    default: return 'Manual'
-  }
+const getProviderIcon = (type: SecretProviderType) => {
+  const option = providerTypeOptions.find(o => o.value === type)
+  return option?.icon || 'lucide:key'
 }
 
 const getProviderById = (id: string) => {
   return secretProviders.value.find(p => p.id === id)
+}
+
+// Check if provider needs both path and key, or just secret name
+const providerNeedsKey = (providerType: SecretProviderType) => {
+  // GCP, Azure, and Bitwarden only need secret name, no separate key
+  // Bitwarden Secrets Manager uses simple key-value pairs
+  return !['gcp', 'azure', 'bitwarden'].includes(providerType)
+}
+
+// Get placeholder text based on provider type
+const getSecretPathPlaceholder = (providerType: SecretProviderType) => {
+  switch (providerType) {
+    case 'vault': return 'secret/path'
+    case 'bitwarden': return 'secret name'
+    case 'aws': return 'secret-name'
+    case 'gcp': return 'secret-name'
+    case 'azure': return 'secret-name'
+    default: return 'secret/path'
+  }
+}
+
+const getSecretKeyPlaceholder = (providerType: SecretProviderType) => {
+  switch (providerType) {
+    case 'vault': return 'key'
+    case 'aws': return 'json-key'
+    default: return 'key'
+  }
 }
 
 const handleSourceChange = (variableId: string, source: string) => {
@@ -311,16 +437,28 @@ const testVariableSecret = async (variable: Variable) => {
     })
 
     if (result.success && result.secrets.length > 0) {
-      const foundKey = result.secrets.find(s => s.key === variable.secretProvider?.secretKey)
-      if (foundKey) {
+      const providerType = provider.type
+      const needsKey = providerNeedsKey(providerType)
+      
+      if (needsKey) {
+        // For providers that need a key (Vault, Bitwarden, AWS)
+        const foundKey = result.secrets.find(s => s.key === variable.secretProvider?.secretKey)
+        if (foundKey) {
+          variableTestResults.value.set(variable.id, { 
+            success: true, 
+            message: 'Secret found!' 
+          })
+        } else {
+          variableTestResults.value.set(variable.id, { 
+            success: false, 
+            message: `Key "${variable.secretProvider.secretKey}" not found in secret. Available: ${result.secrets.map(s => s.key).join(', ')}` 
+          })
+        }
+      } else {
+        // For GCP and Azure - the secret itself is the value, no key needed
         variableTestResults.value.set(variable.id, { 
           success: true, 
           message: 'Secret found!' 
-        })
-      } else {
-        variableTestResults.value.set(variable.id, { 
-          success: false, 
-          message: `Key "${variable.secretProvider.secretKey}" not found in secret. Available: ${result.secrets.map(s => s.key).join(', ')}` 
         })
       }
     } else {
@@ -436,12 +574,6 @@ const buildProviderConfig = (provider: SecretProviderConfig, secretPath: string,
         vaultNamespace: config.namespace,
         vaultSecretPath: secretPath,
       }
-    case '1password':
-      return {
-        onepasswordServiceAccountToken: config.serviceAccountToken,
-        onepasswordVaultId: config.vaultId,
-        onepasswordItemName: secretPath,
-      }
     case 'bitwarden':
       return {
         bitwardenServerUrl: config.serverUrl,
@@ -487,12 +619,6 @@ const buildProviderConfigFromForm = () => {
         vaultMountPath: config.mountPath,
         vaultNamespace: config.namespace,
         vaultSecretPath: 'test',
-      }
-    case '1password':
-      return {
-        onepasswordServiceAccountToken: config.serviceAccountToken,
-        onepasswordVaultId: config.vaultId,
-        onepasswordItemName: 'test',
       }
     case 'bitwarden':
       return {
@@ -788,34 +914,57 @@ watch(variableTestResults, (results) => {
                     
                     <!-- Manual value input -->
                     <template v-if="!variable.secretProvider">
-                      <div class="flex-1 relative">
+                      <div class="flex-1 relative" :data-variable-value-id="variable.id">
                         <UiInput
-                          :model-value="variable.value"
-                          :type="variable.isSecret ? 'password' : 'text'"
-                          placeholder="Enter value"
+                          :model-value="variable.isSecret ? (revealedVariableId === variable.id ? variable.value : '••••••••') : variable.value"
+                          :type="variable.isSecret && revealedVariableId !== variable.id ? 'password' : 'text'"
+                          :placeholder="variable.isSecret ? 'Enter secret value' : 'Enter value'"
+                          :readonly="variable.isSecret && revealedVariableId !== variable.id"
                           class="font-mono h-10 pr-10"
-                          @update:model-value="variableStore.updateGlobalVariable(variable.id, { value: $event })"
+                          @update:model-value="handleVariableValueChange(variable.id, $event)"
+                          @focus="variable.isSecret && revealedVariableId !== variable.id && (revealedVariableId = variable.id)"
                         />
                         <button
+                          v-if="variable.isSecret"
                           class="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
-                          @click="variableStore.updateGlobalVariable(variable.id, { isSecret: !variable.isSecret })"
+                          :title="revealedVariableId === variable.id ? 'Hide value' : 'Reveal value'"
+                          @click="revealedVariableId = revealedVariableId === variable.id ? null : variable.id"
                         >
-                          <Icon :name="variable.isSecret ? 'lucide:eye-off' : 'lucide:eye'" class="h-4 w-4" />
+                          <Icon :name="revealedVariableId === variable.id ? 'lucide:eye-off' : 'lucide:eye'" class="h-4 w-4" />
                         </button>
                       </div>
+                      <!-- Sensitive checkbox -->
+                      <label
+                        class="flex items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer transition-colors"
+                        :class="variable.isSecret ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400' : 'hover:bg-muted text-muted-foreground'"
+                        :title="variable.isSecret ? 'Value is encrypted in OS keychain' : 'Mark as sensitive to encrypt'"
+                      >
+                        <input
+                          type="checkbox"
+                          :checked="variable.isSecret"
+                          class="h-4 w-4 rounded border-input accent-amber-500"
+                          @change="handleSensitiveToggle(variable)"
+                        />
+                        <Icon name="lucide:lock" class="h-3.5 w-3.5" />
+                        <span class="text-xs font-medium">Sensitive</span>
+                      </label>
                     </template>
                     
                     <!-- Provider secret inputs -->
                     <template v-else>
                       <UiInput
                         :model-value="variable.secretProvider.secretPath"
-                        placeholder="secret/path"
-                        class="w-36 font-mono h-10 text-sm"
+                        :placeholder="getSecretPathPlaceholder(getProviderById(variable.secretProvider.providerId)?.type || 'vault')"
+                        :class="[
+                          'font-mono h-10 text-sm',
+                          providerNeedsKey(getProviderById(variable.secretProvider.providerId)?.type || 'vault') ? 'w-36' : 'w-48'
+                        ]"
                         @update:model-value="updateSecretProvider(variable.id, { secretPath: $event })"
                       />
                       <UiInput
+                        v-if="providerNeedsKey(getProviderById(variable.secretProvider.providerId)?.type || 'vault')"
                         :model-value="variable.secretProvider.secretKey"
-                        placeholder="key"
+                        :placeholder="getSecretKeyPlaceholder(getProviderById(variable.secretProvider.providerId)?.type || 'vault')"
                         class="w-28 font-mono h-10 text-sm"
                         @update:model-value="updateSecretProvider(variable.id, { secretKey: $event })"
                       />
@@ -824,7 +973,7 @@ watch(variableTestResults, (results) => {
                         variant="outline"
                         size="sm"
                         class="h-10 px-3"
-                        :disabled="!variable.secretProvider.secretPath || !variable.secretProvider.secretKey || testingVariableId === variable.id"
+                        :disabled="!variable.secretProvider.secretPath || (providerNeedsKey(getProviderById(variable.secretProvider.providerId)?.type || 'vault') && !variable.secretProvider.secretKey) || testingVariableId === variable.id"
                         @click="testVariableSecret(variable)"
                       >
                         <Icon 
@@ -893,7 +1042,9 @@ watch(variableTestResults, (results) => {
                     <div class="text-xs text-muted-foreground flex items-center gap-2">
                       <Icon :name="getProviderIcon(getProviderById(variable.secretProvider.providerId)?.type || 'manual')" class="h-4 w-4" />
                       <span>From {{ getProviderById(variable.secretProvider.providerId)?.name }}</span>
-                      <span class="font-mono text-foreground/70">{{ variable.secretProvider.secretPath }}/{{ variable.secretProvider.secretKey }}</span>
+                      <span class="font-mono text-foreground/70">
+                        {{ variable.secretProvider.secretPath }}{{ providerNeedsKey(getProviderById(variable.secretProvider.providerId)?.type || 'vault') && variable.secretProvider.secretKey ? '/' + variable.secretProvider.secretKey : '' }}
+                      </span>
                     </div>
                     <!-- Test result message -->
                     <div 
@@ -949,24 +1100,43 @@ watch(variableTestResults, (results) => {
                   <UiInput
                     :model-value="variable.key"
                     placeholder="VARIABLE_NAME"
-                    class="flex-1 font-mono h-10"
+                    class="w-40 font-mono h-10"
                     @update:model-value="variableStore.updateEnvironmentVariable(activeEnvironment.id, variable.id, { key: $event })"
                   />
                   <div class="flex-1 relative">
                     <UiInput
-                      :model-value="variable.value"
-                      :type="variable.isSecret ? 'password' : 'text'"
+                      :model-value="variable.isSecret ? (revealedVariableId === variable.id ? variable.value : '••••••••') : variable.value"
+                      :type="variable.isSecret && revealedVariableId !== variable.id ? 'password' : 'text'"
                       :placeholder="`Override value for ${activeEnvironment.name}`"
+                      :readonly="variable.isSecret && revealedVariableId !== variable.id"
                       class="font-mono h-10 pr-10"
                       @update:model-value="variableStore.updateEnvironmentVariable(activeEnvironment.id, variable.id, { value: $event })"
+                      @focus="variable.isSecret && revealedVariableId !== variable.id && (revealedVariableId = variable.id)"
                     />
                     <button
+                      v-if="variable.isSecret"
                       class="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
-                      @click="variableStore.updateEnvironmentVariable(activeEnvironment.id, variable.id, { isSecret: !variable.isSecret })"
+                      :title="revealedVariableId === variable.id ? 'Hide value' : 'Reveal value'"
+                      @click="revealedVariableId = revealedVariableId === variable.id ? null : variable.id"
                     >
-                      <Icon :name="variable.isSecret ? 'lucide:eye-off' : 'lucide:eye'" class="h-4 w-4" />
+                      <Icon :name="revealedVariableId === variable.id ? 'lucide:eye-off' : 'lucide:eye'" class="h-4 w-4" />
                     </button>
                   </div>
+                  <!-- Sensitive checkbox for environment variables -->
+                  <label
+                    class="flex items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer transition-colors"
+                    :class="variable.isSecret ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400' : 'hover:bg-muted text-muted-foreground'"
+                    :title="variable.isSecret ? 'Value is encrypted in OS keychain' : 'Mark as sensitive to encrypt'"
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="variable.isSecret"
+                      class="h-4 w-4 rounded border-input accent-amber-500"
+                      @change="handleEnvSensitiveToggle(activeEnvironment.id, variable)"
+                    />
+                    <Icon name="lucide:lock" class="h-3.5 w-3.5" />
+                    <span class="text-xs font-medium">Sensitive</span>
+                  </label>
                   <UiButton
                     variant="ghost"
                     size="icon"
@@ -1060,21 +1230,6 @@ watch(variableTestResults, (results) => {
                       </template>
                     </div>
                     <div class="flex items-center gap-2">
-                      <!-- Shareable toggle for Git Sync -->
-                      <label 
-                        class="flex items-center gap-2 text-sm cursor-pointer"
-                        :title="env.shareable ? 'This environment will be synced to Git (secrets excluded)' : 'Click to enable Git sync for this environment'"
-                      >
-                        <input
-                          type="checkbox"
-                          :checked="env.shareable"
-                          class="h-4 w-4 rounded border-input accent-primary"
-                          @change="handleShareableChange(env.id, ($event.target as HTMLInputElement).checked)"
-                        />
-                        <Icon name="lucide:git-branch" class="h-4 w-4" :class="env.shareable ? 'text-primary' : 'text-muted-foreground'" />
-                        <span :class="env.shareable ? 'text-foreground' : 'text-muted-foreground'">Sync</span>
-                      </label>
-                      <span class="text-muted-foreground">|</span>
                       <span class="text-sm text-muted-foreground">
                         {{ env.variables.length }} {{ env.variables.length === 1 ? 'override' : 'overrides' }}
                       </span>
@@ -1146,17 +1301,12 @@ watch(variableTestResults, (results) => {
               <div class="grid grid-cols-2 gap-4">
                 <div>
                   <label class="text-sm font-medium mb-2 block">Provider Type</label>
-                  <select
-                    v-model="providerFormType"
-                    class="w-full h-10 rounded-md border border-input bg-background px-3 text-base"
-                  >
-                    <option value="vault">HashiCorp Vault</option>
-                    <option value="1password">1Password</option>
-                    <option value="bitwarden">Bitwarden</option>
-                    <option value="aws">AWS Secrets Manager</option>
-                    <option value="gcp">GCP Secret Manager</option>
-                    <option value="azure">Azure Key Vault</option>
-                  </select>
+                  <UiSelect
+                    :model-value="providerFormType"
+                    :options="providerTypeOptions"
+                    class="w-full h-10"
+                    @update:model-value="providerFormType = $event as any"
+                  />
                 </div>
                 <div>
                   <label class="text-sm font-medium mb-2 block">Name</label>
@@ -1197,29 +1347,6 @@ watch(variableTestResults, (results) => {
                     <UiInput
                       v-model="providerFormConfig.namespace"
                       placeholder="admin"
-                      class="h-10"
-                    />
-                  </div>
-                </div>
-              </template>
-
-              <!-- 1Password Config -->
-              <template v-else-if="providerFormType === '1password'">
-                <div class="grid grid-cols-2 gap-4">
-                  <div class="col-span-2">
-                    <label class="text-sm font-medium mb-2 block">Service Account Token</label>
-                    <UiInput
-                      v-model="providerFormConfig.serviceAccountToken"
-                      type="password"
-                      placeholder="ops_xxxxx"
-                      class="h-10"
-                    />
-                  </div>
-                  <div class="col-span-2">
-                    <label class="text-sm font-medium mb-2 block">Vault ID</label>
-                    <UiInput
-                      v-model="providerFormConfig.vaultId"
-                      placeholder="xxxxx"
                       class="h-10"
                     />
                   </div>
@@ -1391,29 +1518,13 @@ watch(variableTestResults, (results) => {
               <p class="text-lg">No integrations configured</p>
               <p class="text-sm mt-2">Connect to secret managers to securely fetch sensitive values</p>
               <div class="flex flex-wrap justify-center gap-3 mt-6">
-                <div class="flex items-center gap-2 px-4 py-2 rounded-lg bg-muted/50">
-                  <Icon name="lucide:vault" class="h-5 w-5 text-protocol-mqtt" />
-                  <span>HashiCorp Vault</span>
-                </div>
-                <div class="flex items-center gap-2 px-4 py-2 rounded-lg bg-muted/50">
-                  <Icon name="lucide:key-round" class="h-5 w-5 text-protocol-ws" />
-                  <span>1Password</span>
-                </div>
-                <div class="flex items-center gap-2 px-4 py-2 rounded-lg bg-muted/50">
-                  <Icon name="lucide:shield" class="h-5 w-5 text-protocol-http" />
-                  <span>Bitwarden</span>
-                </div>
-                <div class="flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-500/10">
-                  <Icon name="logos:aws" class="h-5 w-5" />
-                  <span>AWS</span>
-                </div>
-                <div class="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-500/10">
-                  <Icon name="logos:google-cloud" class="h-5 w-5" />
-                  <span>GCP</span>
-                </div>
-                <div class="flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-500/10">
-                  <Icon name="logos:microsoft-azure" class="h-5 w-5" />
-                  <span>Azure</span>
+                <div 
+                  v-for="opt in providerTypeOptions" 
+                  :key="opt.value"
+                  class="flex items-center gap-2 px-4 py-2 rounded-lg bg-muted/50"
+                >
+                  <Icon :name="opt.icon" class="h-5 w-5" />
+                  <span>{{ opt.label }}</span>
                 </div>
               </div>
             </div>
@@ -1587,6 +1698,10 @@ watch(variableTestResults, (results) => {
                 <h4 class="font-medium mb-3">What's included?</h4>
                 <div class="grid grid-cols-2 gap-4 text-sm">
                   <div class="flex items-center gap-2">
+                    <Icon name="lucide:repeat" class="h-4 w-4 text-emerald-500" />
+                    <span>Echo endpoint for request testing</span>
+                  </div>
+                  <div class="flex items-center gap-2">
                     <Icon name="lucide:globe" class="h-4 w-4 text-blue-500" />
                     <span>HTTP REST API with CRUD endpoints</span>
                   </div>
@@ -1750,4 +1865,7 @@ watch(variableTestResults, (results) => {
       </div>
     </div>
   </Teleport>
+  
+  <!-- Master Key Setup Dialog -->
+  <MasterKeySetupDialog />
 </template>

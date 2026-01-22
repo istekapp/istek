@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Collection, RequestType, Variable, Environment, RequestTab } from '~/types'
+import type { Collection, CollectionFolder, RequestType, Variable, Environment, RequestTab } from '~/types'
 
 interface SearchResult {
   id: string
@@ -67,30 +67,47 @@ const searchResults = computed<SearchResult[]>(() => {
         id: `collection-${collection.id}`,
         type: 'collection',
         title: collection.name,
-        subtitle: `${collection.requests?.length || 0} requests`,
+        subtitle: `${countCollectionRequests(collection)} requests`,
         icon: 'lucide:folder',
         iconColor: 'text-yellow-500',
         data: collection
       })
     }
     
-    // Search in requests within collections
-    for (const request of collection.requests || []) {
-      const nameMatch = request.name?.toLowerCase().includes(query)
-      const urlMatch = request.url?.toLowerCase().includes(query)
-      
-      if (nameMatch || urlMatch) {
-        results.push({
-          id: `request-${collection.id}-${request.id}`,
-          type: 'request',
-          title: request.name || request.url || 'Untitled Request',
-          subtitle: `${request.method} · ${collection.name}`,
-          icon: getMethodIcon(request.method),
-          iconColor: getMethodColor(request.method),
-          data: { request, collectionId: collection.id }
-        })
+    // Search in requests within collections (including folders)
+    const searchInRequests = (requests: RequestType[], folderPath?: string) => {
+      for (const request of requests || []) {
+        const nameMatch = request.name?.toLowerCase().includes(query)
+        const urlMatch = request.url?.toLowerCase().includes(query)
+        
+        if (nameMatch || urlMatch) {
+          const pathDisplay = folderPath 
+            ? `${request.method} · ${collection.name} / ${folderPath}`
+            : `${request.method} · ${collection.name}`
+          results.push({
+            id: `request-${collection.id}-${request.id}`,
+            type: 'request',
+            title: request.name || request.url || 'Untitled Request',
+            subtitle: pathDisplay,
+            icon: getMethodIcon(request.method),
+            iconColor: getMethodColor(request.method),
+            data: { request, collectionId: collection.id }
+          })
+        }
       }
     }
+    
+    const searchInFolders = (folders: CollectionFolder[] | undefined, parentPath?: string) => {
+      if (!folders) return
+      for (const folder of folders) {
+        const currentPath = parentPath ? `${parentPath} / ${folder.name}` : folder.name
+        searchInRequests(folder.requests, currentPath)
+        searchInFolders(folder.folders, currentPath)
+      }
+    }
+    
+    searchInRequests(collection.requests)
+    searchInFolders(collection.folders)
   }
   
   // Search in global variables
@@ -216,7 +233,7 @@ const getRecentItems = (): SearchResult[] => {
       id: `collection-${collection.id}`,
       type: 'collection',
       title: collection.name,
-      subtitle: `${collection.requests?.length || 0} requests`,
+      subtitle: `${countCollectionRequests(collection)} requests`,
       icon: 'lucide:folder',
       iconColor: 'text-yellow-500',
       data: collection
@@ -247,10 +264,27 @@ const getIntegrationIcon = (type: string) => {
     case 'gcp': return 'lucide:cloud'
     case 'azure': return 'lucide:cloud'
     case 'vault': return 'lucide:lock'
-    case '1password': return 'lucide:key'
     case 'bitwarden': return 'lucide:shield'
     default: return 'lucide:plug'
   }
+}
+
+// Count all requests in a collection including nested folders
+const countCollectionRequests = (collection: Collection): number => {
+  let count = collection.requests?.length || 0
+  
+  const countFolderRequests = (folders: CollectionFolder[] | undefined): number => {
+    if (!folders) return 0
+    let folderCount = 0
+    for (const folder of folders) {
+      folderCount += folder.requests?.length || 0
+      folderCount += countFolderRequests(folder.folders)
+    }
+    return folderCount
+  }
+  
+  count += countFolderRequests(collection.folders)
+  return count
 }
 
 const formatTime = (timestamp: number) => {

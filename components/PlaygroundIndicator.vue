@@ -51,6 +51,7 @@ const endpoints = computed(() => {
   if (!status.value?.running) return []
   
   return [
+    { name: 'Echo', url: status.value.echoUrl, icon: 'lucide:repeat', color: 'text-emerald-500' },
     { name: 'HTTP API', url: status.value.httpUrl, icon: 'lucide:globe', color: 'text-blue-500' },
     { name: 'WebSocket', url: status.value.wsUrl, icon: 'lucide:radio', color: 'text-green-500' },
     { name: 'GraphQL', url: status.value.graphqlUrl, icon: 'lucide:hexagon', color: 'text-pink-500' },

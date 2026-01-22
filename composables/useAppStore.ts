@@ -7,16 +7,15 @@ import type {
 import { generateId } from '~/lib/utils'
 import { invoke } from '@tauri-apps/api/core'
 
-// Helper to sync collections to filesystem if sync is enabled
-async function syncCollectionsIfEnabled() {
+// Helper to refresh git status after collection changes
+async function refreshGitStatusIfEnabled() {
   try {
     const workspaceStore = useWorkspaceStore()
     if (workspaceStore.hasSyncEnabled.value) {
-      await invoke('sync_export_collections')
       await workspaceStore.refreshGitStatus()
     }
   } catch (e) {
-    console.error('Failed to sync collections:', e)
+    console.error('Failed to refresh git status:', e)
   }
 }
 
@@ -687,9 +686,25 @@ export const useAppStore = () => {
   }
 
   const loadFromHistory = (item: HistoryItem) => {
+    // Check if this history item is already open in a tab
+    const existingTab = tabs.value.find(t => {
+      if (t.type !== 'request') return false
+      const reqTab = t as RequestTab
+      return reqTab.sourceHistoryId === item.id
+    })
+    
+    if (existingTab) {
+      // Switch to existing tab
+      activeTabId.value = existingTab.id
+      return
+    }
+    
+    // Create new tab
     const protocol = item.request.protocol || 'http'
     const newTab = createNewRequestTab(protocol)
     newTab.request = { ...item.request, id: generateId() }
+    // Track the source history item
+    newTab.sourceHistoryId = item.id
     tabs.value = [...tabs.value, newTab]
     activeTabId.value = newTab.id
   }
@@ -711,7 +726,7 @@ export const useAppStore = () => {
     // Persist to database
     try {
       await invoke('save_collection', { collection })
-      await syncCollectionsIfEnabled()
+      await refreshGitStatusIfEnabled()
     } catch (e) {
       console.error('Failed to save collection:', e)
     }
@@ -733,7 +748,7 @@ export const useAppStore = () => {
     if (collection) {
       try {
         await invoke('save_collection', { collection })
-        await syncCollectionsIfEnabled()
+        await refreshGitStatusIfEnabled()
       } catch (e) {
         console.error('Failed to save collection:', e)
       }
@@ -768,7 +783,7 @@ export const useAppStore = () => {
     if (collection) {
       try {
         await invoke('save_collection', { collection })
-        await syncCollectionsIfEnabled()
+        await refreshGitStatusIfEnabled()
       } catch (e) {
         console.error('Failed to update collection:', e)
       }
@@ -831,9 +846,26 @@ export const useAppStore = () => {
     // Persist to database
     try {
       await invoke('delete_collection', { id: collectionId })
-      await syncCollectionsIfEnabled()
+      await refreshGitStatusIfEnabled()
     } catch (e) {
       console.error('Failed to delete collection:', e)
+    }
+  }
+
+  const updateCollection = async (collection: Collection) => {
+    // Update in store
+    const index = collections.value.findIndex(c => c.id === collection.id)
+    if (index !== -1) {
+      collections.value[index] = collection
+      collections.value = [...collections.value]
+    }
+    
+    // Persist to database
+    try {
+      await invoke('save_collection', { collection })
+      await refreshGitStatusIfEnabled()
+    } catch (e) {
+      console.error('Failed to update collection:', e)
     }
   }
 
@@ -850,7 +882,7 @@ export const useAppStore = () => {
     if (collection) {
       try {
         await invoke('save_collection', { collection })
-        await syncCollectionsIfEnabled()
+        await refreshGitStatusIfEnabled()
       } catch (e) {
         console.error('Failed to save collection:', e)
       }
@@ -875,7 +907,7 @@ export const useAppStore = () => {
     if (collection) {
       try {
         await invoke('save_collection', { collection })
-        await syncCollectionsIfEnabled()
+        await refreshGitStatusIfEnabled()
       } catch (e) {
         console.error('Failed to save collection:', e)
       }
@@ -997,6 +1029,7 @@ export const useAppStore = () => {
     addCollection,
     saveToCollection,
     updateInCollection,
+    updateCollection,
     loadFromCollection,
     deleteCollection,
     deleteRequestFromCollection,

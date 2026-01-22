@@ -28,6 +28,11 @@ const codeEditorLanguage = computed(() => {
   return lang?.editorLang || 'text'
 })
 
+// Convert to format expected by UiSelect
+const codeLanguageOptions = computed(() => 
+  codeLanguages.map(l => ({ value: l.value, label: l.label, icon: 'lucide:code' }))
+)
+
 // Generate code when language changes or tab opens
 const generateCode = async () => {
   if (responseTab.value !== 'code') return
@@ -226,14 +231,11 @@ const getStatusBadgeClass = (status: number) => {
           </UiButton>
         </div>
         <div v-else class="flex items-center gap-2">
-          <select
+          <UiSelect
             v-model="selectedLanguage"
-            class="h-9 rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option v-for="lang in codeLanguages" :key="lang.value" :value="lang.value">
-              {{ lang.label }}
-            </option>
-          </select>
+            :options="codeLanguageOptions"
+            class="w-[180px]"
+          />
           <UiButton variant="ghost" class="h-9 text-sm" @click="copyCode">
             <Icon :name="copied ? 'lucide:check' : 'lucide:copy'" class="mr-1.5 h-4 w-4" />
             {{ copied ? 'Copied!' : 'Copy' }}

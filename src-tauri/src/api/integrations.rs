@@ -108,7 +108,7 @@ pub struct FetchSecretResponse {
         ("offset" = Option<i64>, Query, description = "Number of items to skip (default: 0)")
     ),
     responses(
-        (status = 200, description = "List of integrations", body = PaginatedResponse<IntegrationResponse>)
+        (status = 200, description = "List of integrations", body = PaginatedResponseSchema)
     ),
     tag = "Integrations"
 )]
@@ -356,11 +356,6 @@ pub async fn test_integration(
     // TODO: Implement actual integration testing based on provider_type
     // For now, just return a placeholder response
     let response = match provider.provider_type.as_str() {
-        "1password" => TestIntegrationResponse {
-            success: true,
-            message: Some("1Password integration configured (actual test not implemented)".to_string()),
-            error: None,
-        },
         "hashicorp_vault" => TestIntegrationResponse {
             success: true,
             message: Some("HashiCorp Vault integration configured (actual test not implemented)".to_string()),

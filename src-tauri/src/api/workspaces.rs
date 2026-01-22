@@ -59,7 +59,7 @@ impl From<Workspace> for WorkspaceResponse {
         ("offset" = Option<i64>, Query, description = "Number of items to skip (default: 0)")
     ),
     responses(
-        (status = 200, description = "List of workspaces", body = PaginatedResponse<WorkspaceResponse>)
+        (status = 200, description = "List of workspaces", body = PaginatedResponseSchema)
     ),
     tag = "Workspaces"
 )]

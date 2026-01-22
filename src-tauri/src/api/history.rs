@@ -43,7 +43,7 @@ impl From<HistoryItem> for HistoryItemResponse {
         ("offset" = Option<i64>, Query, description = "Number of items to skip (default: 0)")
     ),
     responses(
-        (status = 200, description = "List of history items", body = PaginatedResponse<HistoryItemResponse>)
+        (status = 200, description = "List of history items", body = PaginatedResponseSchema)
     ),
     tag = "History"
 )]

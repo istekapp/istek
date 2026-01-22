@@ -30,8 +30,9 @@ export const useWorkspaceStore = () => {
     workspaces.value.find(w => w.id === activeWorkspaceId.value)
   )
 
+  // Git sync is enabled if .git directory exists
   const hasSyncEnabled = computed(() => 
-    activeWorkspace.value?.syncPath != null
+    gitStatus.value?.isRepo === true
   )
 
   const hasGitRepo = computed(() => 
@@ -73,10 +74,7 @@ export const useWorkspaceStore = () => {
         await invoke('sync_save_config', {
           config: {
             enabled: true,
-            syncPath: active.syncPath,
-            syncCollections: true,
-            syncEnvironments: true,
-            syncGlobalVariables: true
+            syncPath: active.syncPath
           }
         })
         await refreshGitStatus()
@@ -162,10 +160,7 @@ export const useWorkspaceStore = () => {
         await invoke('sync_save_config', {
           config: {
             enabled: true,
-            syncPath: workspace.syncPath,
-            syncCollections: true,
-            syncEnvironments: true,
-            syncGlobalVariables: true
+            syncPath: workspace.syncPath
           }
         })
         await refreshGitStatus()
@@ -174,10 +169,7 @@ export const useWorkspaceStore = () => {
         await invoke('sync_save_config', {
           config: {
             enabled: false,
-            syncPath: '',
-            syncCollections: true,
-            syncEnvironments: true,
-            syncGlobalVariables: true
+            syncPath: ''
           }
         })
       }
@@ -224,11 +216,10 @@ export const useWorkspaceStore = () => {
   async function refreshGitStatus(): Promise<void> {
     const workspace = activeWorkspace.value
     console.log('[refreshGitStatus] activeWorkspaceId:', activeWorkspaceId.value)
-    console.log('[refreshGitStatus] workspaces:', workspaces.value.map(w => ({ id: w.id, name: w.name })))
-    console.log('[refreshGitStatus] workspace:', workspace?.name, 'syncPath:', workspace?.syncPath)
+    console.log('[refreshGitStatus] workspace:', workspace?.name)
     
-    if (!workspace?.syncPath) {
-      console.log('[refreshGitStatus] No sync path, clearing gitStatus')
+    if (!workspace) {
+      console.log('[refreshGitStatus] No active workspace, clearing gitStatus')
       gitStatus.value = null
       return
     }

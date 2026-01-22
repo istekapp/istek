@@ -18,6 +18,7 @@ const importUrl = ref('')
 // showMockServer is no longer needed as we use tabs now
 const showSecretProviders = ref(false)
 const isExporting = ref(false)
+const isExportingWiremock = ref(false)
 const exportError = ref<string | null>(null)
 
 // Folder Settings Dialog state
@@ -43,7 +44,7 @@ const toggleCollectionMenu = (e: Event, collectionId: string) => {
   const rect = button.getBoundingClientRect()
   menuPosition.value = {
     top: rect.bottom + 4,
-    left: rect.right - 192 // 192px = w-48
+    left: rect.right - 224 // 224px = w-56
   }
   activeCollectionMenu.value = collectionId
 }
@@ -98,6 +99,171 @@ const handleExportYaml = async (collection: Collection) => {
   } finally {
     isExporting.value = false
   }
+}
+
+// Export collection as WireMock JSON
+const handleExportWiremock = async (collection: Collection) => {
+  closeCollectionMenu()
+  isExportingWiremock.value = true
+  exportError.value = null
+  
+  try {
+    // Generate WireMock stubs from collection
+    const stubs = generateWiremockStubs(collection)
+    const jsonContent = JSON.stringify(stubs, null, 2)
+    
+    // Open save dialog
+    const filePath = await save({
+      defaultPath: `${collection.name.replace(/[^a-zA-Z0-9-_]/g, '_')}-wiremock.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+    
+    if (filePath) {
+      // Write file using Tauri fs
+      const { writeTextFile } = await import('@tauri-apps/plugin-fs')
+      await writeTextFile(filePath, jsonContent)
+    }
+  } catch (error: any) {
+    exportError.value = error.toString()
+    console.error('Failed to export WireMock JSON:', error)
+  } finally {
+    isExportingWiremock.value = false
+  }
+}
+
+// Generate WireMock stub mappings from collection
+const generateWiremockStubs = (collection: Collection) => {
+  const mappings: any[] = []
+  
+  // Process root-level requests
+  if (collection.requests) {
+    for (const request of collection.requests) {
+      const stub = generateWiremockStub(request as HttpRequest)
+      if (stub) mappings.push(stub)
+    }
+  }
+  
+  // Process folder requests
+  if (collection.folders) {
+    for (const folder of collection.folders) {
+      if (folder.requests) {
+        for (const request of folder.requests) {
+          const stub = generateWiremockStub(request as HttpRequest)
+          if (stub) mappings.push(stub)
+        }
+      }
+    }
+  }
+  
+  return { mappings }
+}
+
+// Generate a single WireMock stub from a request
+const generateWiremockStub = (request: HttpRequest) => {
+  // Only HTTP requests can be converted to WireMock
+  if (!request.url) return null
+  
+  // Parse URL to get path
+  let urlPath = request.url
+  try {
+    // If it's a full URL, extract the path
+    if (request.url.startsWith('http://') || request.url.startsWith('https://')) {
+      const url = new URL(request.url)
+      urlPath = url.pathname
+    } else if (request.url.startsWith('/')) {
+      urlPath = request.url
+    } else {
+      urlPath = '/' + request.url
+    }
+  } catch {
+    // If URL parsing fails, use as-is with leading slash
+    if (!urlPath.startsWith('/')) {
+      urlPath = '/' + urlPath
+    }
+  }
+  
+  // Remove query params from path (WireMock handles them separately)
+  const queryIndex = urlPath.indexOf('?')
+  if (queryIndex > -1) {
+    urlPath = urlPath.substring(0, queryIndex)
+  }
+  
+  // Replace path variables like {id} or :id with WireMock regex pattern
+  const urlPathPattern = urlPath
+    .replace(/\{([^}]+)\}/g, '[^/]+')  // {id} -> [^/]+
+    .replace(/:([^/]+)/g, '[^/]+')     // :id -> [^/]+
+  
+  const stub: any = {
+    name: request.name || `${request.method} ${urlPath}`,
+    request: {
+      method: request.method || 'GET',
+      urlPathPattern: urlPathPattern
+    },
+    response: {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      jsonBody: {
+        message: 'Mock response',
+        path: urlPath
+      }
+    }
+  }
+  
+  // Add query parameters if present
+  if (request.params && request.params.length > 0) {
+    const enabledParams = request.params.filter(p => p.enabled && p.key)
+    if (enabledParams.length > 0) {
+      stub.request.queryParameters = {}
+      for (const param of enabledParams) {
+        stub.request.queryParameters[param.key] = {
+          equalTo: param.value || ''
+        }
+      }
+    }
+  }
+  
+  // Add request headers if present
+  if (request.headers && request.headers.length > 0) {
+    const enabledHeaders = request.headers.filter(h => h.enabled && h.key)
+    if (enabledHeaders.length > 0) {
+      stub.request.headers = {}
+      for (const header of enabledHeaders) {
+        // Skip common headers that shouldn't be matched
+        if (['host', 'user-agent', 'accept', 'content-length'].includes(header.key.toLowerCase())) continue
+        stub.request.headers[header.key] = {
+          equalTo: header.value || ''
+        }
+      }
+      // Remove empty headers object
+      if (Object.keys(stub.request.headers).length === 0) {
+        delete stub.request.headers
+      }
+    }
+  }
+  
+  // Add request body pattern if present (for POST/PUT/PATCH)
+  if (request.body && ['POST', 'PUT', 'PATCH'].includes(request.method || '')) {
+    if (request.bodyType === 'json') {
+      try {
+        // Validate it's valid JSON
+        JSON.parse(request.body)
+        stub.request.bodyPatterns = [{
+          equalToJson: request.body,
+          ignoreArrayOrder: true,
+          ignoreExtraElements: true
+        }]
+      } catch {
+        // If not valid JSON, use contains pattern
+        stub.request.bodyPatterns = [{
+          contains: request.body
+        }]
+      }
+    }
+  }
+  
+  return stub
 }
 
 // Import collection from YAML file
@@ -1180,7 +1346,7 @@ const getResponseStatus = (item: HistoryItem): { status: number | null; success:
     <Teleport to="body">
       <div
         v-if="activeCollectionMenu && getActiveCollection()"
-        class="fixed z-[100] w-48 rounded-md border border-border bg-popover p-1 shadow-lg collection-menu"
+        class="fixed z-[100] w-56 rounded-md border border-border bg-popover p-1 shadow-lg collection-menu"
         :style="{ top: menuPosition.top + 'px', left: menuPosition.left + 'px' }"
       >
         <button
@@ -1213,6 +1379,15 @@ const getResponseStatus = (item: HistoryItem): { status: number | null; success:
           <Icon v-if="isExporting" name="lucide:loader-2" class="h-4 w-4 animate-spin" />
           <Icon v-else name="lucide:file-output" class="h-4 w-4 text-muted-foreground" />
           Export as YAML
+        </button>
+        <button
+          class="flex w-full items-center gap-2 rounded px-3 py-2 text-sm hover:bg-accent"
+          :disabled="isExportingWiremock"
+          @click="handleExportWiremock(getActiveCollection()!)"
+        >
+          <Icon v-if="isExportingWiremock" name="lucide:loader-2" class="h-4 w-4 animate-spin" />
+          <Icon v-else name="lucide:cloud-download" class="h-4 w-4 text-blue-400" />
+          Export WireMock JSON
         </button>
         <div class="my-1 border-t border-border"></div>
         <button

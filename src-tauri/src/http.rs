@@ -461,7 +461,7 @@ pub fn generate_code_snippet(
     }
 }
 
-fn generate_curl(method: &str, url: &str, headers: &[SimpleKeyValue], body: &Option<String>, body_type: &str) -> String {
+fn generate_curl(method: &str, url: &str, headers: &[SimpleKeyValue], body: &Option<String>, _body_type: &str) -> String {
     let mut parts: Vec<String> = vec!["curl".to_string()];
     
     if method.to_uppercase() != "GET" {

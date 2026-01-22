@@ -40,6 +40,9 @@ const promptArgs = ref<Record<string, string>>({})
 const resultOutput = ref<string>('')
 const isExecuting = ref(false)
 
+// Track which server is currently connecting (by unique key)
+const connectingServerId = ref<string | null>(null)
+
 // App icons and colors
 const appConfig: Record<string, { icon: string; color: string; bgColor: string }> = {
   'Claude Desktop': { icon: 'simple-icons:anthropic', color: 'text-orange-400', bgColor: 'bg-orange-500/10' },
@@ -109,6 +112,7 @@ const deleteSavedServer = async (server: SavedMcpServer) => {
 }
 
 const connectToSavedServer = async (server: SavedMcpServer) => {
+  connectingServerId.value = `saved-${server.id}`
   store.updateActiveRequest({
     command: server.command,
     args: server.args,
@@ -116,6 +120,7 @@ const connectToSavedServer = async (server: SavedMcpServer) => {
   })
   
   await connect()
+  connectingServerId.value = null
 }
 
 const discoverConfigs = async () => {
@@ -145,6 +150,7 @@ const allServers = computed(() => {
 })
 
 const connectToServer = async (server: DiscoveredMcp) => {
+  connectingServerId.value = `discover-${server.name}`
   store.updateActiveRequest({
     command: server.command,
     args: server.args,
@@ -152,6 +158,7 @@ const connectToServer = async (server: DiscoveredMcp) => {
   })
   
   await connect()
+  connectingServerId.value = null
 }
 
 const parseManualEnv = (): Record<string, string> => {
@@ -168,6 +175,7 @@ const parseManualEnv = (): Record<string, string> => {
 }
 
 const connectManual = async () => {
+  connectingServerId.value = 'manual'
   const args = manualArgs.value.trim() ? manualArgs.value.trim().split(/\s+/) : []
   const env = parseManualEnv()
   
@@ -178,6 +186,7 @@ const connectManual = async () => {
   })
   
   await connect()
+  connectingServerId.value = null
 }
 
 const saveManualServer = () => {
@@ -565,9 +574,9 @@ onUnmounted(() => {
                       <UiButton
                         size="sm"
                         @click="connectToServer(server)"
-                        :disabled="activeTab.isLoading"
+                        :disabled="connectingServerId !== null"
                       >
-                        <Icon v-if="activeTab.isLoading" name="lucide:loader-2" class="h-4 w-4 animate-spin mr-1.5" />
+                        <Icon v-if="connectingServerId === `discover-${server.name}`" name="lucide:loader-2" class="h-4 w-4 animate-spin mr-1.5" />
                         <Icon v-else name="lucide:plug" class="h-4 w-4 mr-1.5" />
                         Connect
                       </UiButton>
@@ -659,9 +668,9 @@ onUnmounted(() => {
                     <UiButton
                       size="sm"
                       @click="connectToSavedServer(server)"
-                      :disabled="activeTab.isLoading"
+                      :disabled="connectingServerId !== null"
                     >
-                      <Icon v-if="activeTab.isLoading" name="lucide:loader-2" class="h-4 w-4 animate-spin mr-1.5" />
+                      <Icon v-if="connectingServerId === `saved-${server.id}`" name="lucide:loader-2" class="h-4 w-4 animate-spin mr-1.5" />
                       <Icon v-else name="lucide:plug" class="h-4 w-4 mr-1.5" />
                       Connect
                     </UiButton>
@@ -718,10 +727,10 @@ onUnmounted(() => {
             </UiButton>
             <UiButton
               @click="connectManual"
-              :disabled="!manualCommand.trim() || activeTab.isLoading"
+              :disabled="!manualCommand.trim() || connectingServerId !== null"
               class="flex-1"
             >
-              <Icon v-if="activeTab.isLoading" name="lucide:loader-2" class="h-4 w-4 animate-spin mr-2" />
+              <Icon v-if="connectingServerId === 'manual'" name="lucide:loader-2" class="h-4 w-4 animate-spin mr-2" />
               <Icon v-else name="lucide:plug" class="h-4 w-4 mr-2" />
               Connect
             </UiButton>

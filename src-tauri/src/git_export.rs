@@ -42,6 +42,22 @@ pub struct ExportedCollection {
     pub created_at: i64,
 }
 
+/// Remove fields from a JSON object that are already in the ExportedRequest struct
+fn strip_request_meta_fields(req: &serde_json::Value) -> serde_json::Value {
+    if let serde_json::Value::Object(map) = req {
+        let mut new_map = serde_json::Map::new();
+        for (key, value) in map {
+            // Skip fields that are already defined in ExportedRequest struct
+            if key != "id" && key != "name" && key != "protocol" {
+                new_map.insert(key.clone(), value.clone());
+            }
+        }
+        serde_json::Value::Object(new_map)
+    } else {
+        req.clone()
+    }
+}
+
 /// Convert a collection JSON to the export format
 fn convert_to_export_format(collection: &serde_json::Value) -> Result<ExportedCollection, String> {
     let id = collection.get("id")
@@ -72,7 +88,7 @@ fn convert_to_export_format(collection: &serde_json::Value) -> Result<ExportedCo
                     id,
                     name,
                     protocol,
-                    data: req.clone(),
+                    data: strip_request_meta_fields(req),
                 })
             }).collect()
         });
@@ -119,7 +135,7 @@ fn convert_folder(folder: &serde_json::Value) -> Result<ExportedFolder, String> 
                     id,
                     name,
                     protocol,
-                    data: req.clone(),
+                    data: strip_request_meta_fields(req),
                 })
             }).collect()
         });

@@ -262,19 +262,24 @@ const formatTimestamp = (ts: number) => {
           </div>
 
           <!-- Remote URL Input -->
-          <div v-if="showRemoteInput" class="flex items-center gap-2 bg-secondary/20 rounded-md p-2">
-            <input
-              v-model="remoteUrl"
-              type="text"
-              placeholder="git@github.com:user/repo.git"
-              class="flex-1 bg-transparent border border-border rounded px-2 py-1 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
-            />
-            <UiButton size="sm" @click="handleAddRemote" :disabled="!remoteUrl.trim()">
-              Add
-            </UiButton>
-            <UiButton size="sm" variant="ghost" @click="showRemoteInput = false">
-              Cancel
-            </UiButton>
+          <div v-if="showRemoteInput" class="bg-secondary/20 rounded-md p-2 space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                v-model="remoteUrl"
+                type="text"
+                placeholder="git@github.com:user/repo.git"
+                class="flex-1 bg-transparent border border-border rounded px-2 py-1 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <UiButton size="sm" @click="handleAddRemote" :disabled="!remoteUrl.trim()">
+                Add
+              </UiButton>
+              <UiButton size="sm" variant="ghost" @click="showRemoteInput = false">
+                Cancel
+              </UiButton>
+            </div>
+            <p class="text-xs text-muted-foreground">
+              Uses your system's Git credentials. If terminal works, this will too.
+            </p>
           </div>
 
           <!-- Tabs -->

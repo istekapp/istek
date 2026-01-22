@@ -10,12 +10,21 @@ const newBranchName = ref('')
 const isCreatingBranch = ref(false)
 const branchError = ref<string | null>(null)
 
+// Remote dialog
+const showRemoteDialog = ref(false)
+const remoteUrl = ref('')
+const isAddingRemote = ref(false)
+const remoteError = ref<string | null>(null)
+
+// Push/Pull state
+const isPushing = ref(false)
+const isPulling = ref(false)
+const pushPullError = ref<string | null>(null)
+
 // Access store's useState refs directly for proper reactivity
 const gitStatus = computed(() => workspaceStore.gitStatus.value)
-const hasSyncEnabled = computed(() => {
-  const ws = workspaceStore.workspaces.value.find(w => w.id === workspaceStore.activeWorkspaceId.value)
-  return ws?.syncPath != null
-})
+// Git sync is enabled if .git directory exists (isRepo = true)
+const hasSyncEnabled = computed(() => gitStatus.value?.isRepo === true)
 const hasGitRepo = computed(() => {
   const status = gitStatus.value
   console.log('[GitStatusBar] hasGitRepo computed, gitStatus:', status)
@@ -25,6 +34,12 @@ const currentBranch = computed(() => gitStatus.value?.branch || 'main')
 const uncommittedCount = computed(() => gitStatus.value?.uncommittedChanges?.length ?? 0)
 const branches = computed(() => workspaceStore.branches.value)
 const isGitLoading = computed(() => workspaceStore.isGitLoading.value)
+const hasRemote = computed(() => gitStatus.value?.remoteUrl != null)
+const remoteUrlDisplay = computed(() => gitStatus.value?.remoteUrl || '')
+const aheadBehind = computed(() => ({
+  ahead: gitStatus.value?.ahead ?? 0,
+  behind: gitStatus.value?.behind ?? 0
+}))
 
 const handleInitGit = async () => {
   try {
@@ -93,6 +108,67 @@ const cancelCreateBranch = () => {
   showNewBranchDialog.value = false
   newBranchName.value = ''
   branchError.value = null
+}
+
+// Remote handlers
+const handleAddRemote = () => {
+  showMenu.value = false
+  remoteUrl.value = ''
+  remoteError.value = null
+  showRemoteDialog.value = true
+}
+
+const confirmAddRemote = async () => {
+  const url = remoteUrl.value.trim()
+  if (!url) return
+  
+  try {
+    isAddingRemote.value = true
+    remoteError.value = null
+    await workspaceStore.gitAddRemote(url)
+    showRemoteDialog.value = false
+    remoteUrl.value = ''
+  } catch (e) {
+    remoteError.value = String(e)
+    console.error('Failed to add remote:', e)
+  } finally {
+    isAddingRemote.value = false
+  }
+}
+
+const cancelAddRemote = () => {
+  showRemoteDialog.value = false
+  remoteUrl.value = ''
+  remoteError.value = null
+}
+
+// Push/Pull handlers
+const handlePush = async () => {
+  try {
+    isPushing.value = true
+    pushPullError.value = null
+    showMenu.value = false
+    await workspaceStore.gitPush()
+  } catch (e) {
+    pushPullError.value = String(e)
+    console.error('Failed to push:', e)
+  } finally {
+    isPushing.value = false
+  }
+}
+
+const handlePull = async () => {
+  try {
+    isPulling.value = true
+    pushPullError.value = null
+    showMenu.value = false
+    await workspaceStore.gitPull()
+  } catch (e) {
+    pushPullError.value = String(e)
+    console.error('Failed to pull:', e)
+  } finally {
+    isPulling.value = false
+  }
 }
 
 // Emit event to open workspace settings
@@ -197,6 +273,58 @@ onMounted(() => {
           <!-- Divider -->
           <div class="border-t border-border my-1"></div>
 
+          <!-- Remote Section -->
+          <template v-if="!hasRemote">
+            <button
+              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors"
+              @click="handleAddRemote"
+            >
+              <Icon name="lucide:cloud" class="w-4 h-4 text-muted-foreground" />
+              <span>Add Remote</span>
+            </button>
+          </template>
+          <template v-else>
+            <!-- Push -->
+            <button
+              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors"
+              :disabled="isPushing"
+              @click="handlePush"
+            >
+              <Icon v-if="isPushing" name="lucide:loader-2" class="w-4 h-4 animate-spin" />
+              <Icon v-else name="lucide:arrow-up" class="w-4 h-4 text-muted-foreground" />
+              <span>Push</span>
+              <span v-if="aheadBehind.ahead > 0" class="ml-auto text-xs bg-blue-500/20 text-blue-500 px-1.5 py-0.5 rounded">
+                {{ aheadBehind.ahead }}
+              </span>
+            </button>
+            
+            <!-- Pull -->
+            <button
+              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors"
+              :disabled="isPulling"
+              @click="handlePull"
+            >
+              <Icon v-if="isPulling" name="lucide:loader-2" class="w-4 h-4 animate-spin" />
+              <Icon v-else name="lucide:arrow-down" class="w-4 h-4 text-muted-foreground" />
+              <span>Pull</span>
+              <span v-if="aheadBehind.behind > 0" class="ml-auto text-xs bg-orange-500/20 text-orange-500 px-1.5 py-0.5 rounded">
+                {{ aheadBehind.behind }}
+              </span>
+            </button>
+            
+            <!-- Change Remote -->
+            <button
+              class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors text-muted-foreground"
+              @click="handleAddRemote"
+            >
+              <Icon name="lucide:settings" class="w-4 h-4" />
+              <span class="truncate text-xs">{{ remoteUrlDisplay }}</span>
+            </button>
+          </template>
+
+          <!-- Divider -->
+          <div class="border-t border-border my-1"></div>
+
           <!-- Commit Action -->
           <button
             class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors"
@@ -281,6 +409,60 @@ onMounted(() => {
             >
               <Icon v-if="isCreatingBranch" name="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
               Create Branch
+            </UiButton>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+    
+    <!-- Add Remote Dialog -->
+    <Teleport to="body">
+      <div
+        v-if="showRemoteDialog"
+        class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50"
+        @click.self="cancelAddRemote"
+      >
+        <div class="bg-background border border-border rounded-lg w-[500px] shadow-xl">
+          <div class="flex items-center justify-between p-4 border-b border-border">
+            <h3 class="font-semibold">{{ hasRemote ? 'Change Remote' : 'Add Remote' }}</h3>
+            <button class="p-1 hover:bg-accent rounded" @click="cancelAddRemote">
+              <Icon name="lucide:x" class="w-4 h-4" />
+            </button>
+          </div>
+          
+          <div class="p-4 space-y-4">
+            <div v-if="remoteError" class="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md p-2">
+              {{ remoteError }}
+            </div>
+            
+            <div>
+              <label class="text-sm text-muted-foreground mb-1 block">Remote URL</label>
+              <input
+                v-model="remoteUrl"
+                type="text"
+                placeholder="https://github.com/username/repo.git"
+                class="w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+                @keydown.enter="confirmAddRemote"
+                @keydown.escape="cancelAddRemote"
+              />
+              <p class="text-xs text-muted-foreground mt-2">
+                Istek uses your system's Git credentials (Keychain, Credential Manager, etc.).<br/>
+                If you can push/pull from terminal, it will work here too.
+              </p>
+            </div>
+          </div>
+          
+          <div class="flex items-center justify-end gap-2 p-4 border-t border-border">
+            <UiButton variant="outline" size="sm" @click="cancelAddRemote">
+              Cancel
+            </UiButton>
+            <UiButton 
+              size="sm" 
+              :disabled="!remoteUrl.trim() || isAddingRemote"
+              @click="confirmAddRemote"
+            >
+              <Icon v-if="isAddingRemote" name="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
+              {{ hasRemote ? 'Update Remote' : 'Add Remote' }}
             </UiButton>
           </div>
         </div>

@@ -376,8 +376,11 @@ fn extract_variables(
 fn substitute_variables(text: &str, variables: &HashMap<String, String>) -> String {
     let mut result = text.to_string();
     for (key, value) in variables {
-        let pattern = format!("{{{{{}}}}}", key);
-        result = result.replace(&pattern, value);
+        // Support both {{variableName}} and {variableName} formats
+        let double_brace_pattern = format!("{{{{{}}}}}", key);
+        let single_brace_pattern = format!("{{{}}}", key);
+        result = result.replace(&double_brace_pattern, value);
+        result = result.replace(&single_brace_pattern, value);
     }
     result
 }

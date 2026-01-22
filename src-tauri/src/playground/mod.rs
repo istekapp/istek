@@ -42,6 +42,7 @@ pub struct PlaygroundStatus {
     pub unix_socket: Option<String>,
     pub openapi_url: Option<String>,
     pub sse_url: Option<String>,
+    pub echo_url: Option<String>,
 }
 
 impl PlaygroundStatus {
@@ -56,6 +57,7 @@ impl PlaygroundStatus {
             unix_socket: None,
             openapi_url: None,
             sse_url: None,
+            echo_url: None,
         }
     }
 
@@ -74,6 +76,7 @@ impl PlaygroundStatus {
             },
             openapi_url: Some(format!("http://localhost:{}/openapi.json", HTTP_PORT)),
             sse_url: Some(format!("http://localhost:{}/sse/events", HTTP_PORT)),
+            echo_url: Some(format!("http://localhost:{}/echo", HTTP_PORT)),
         }
     }
 }

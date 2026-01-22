@@ -324,7 +324,7 @@ watch(() => activeTab.value.request.bodyType, (newType) => {
       </div>
 
       <div ref="saveMenuRef" class="relative">
-        <UiButton variant="outline" class="h-11 px-4 gap-2" @click="handleSaveClick">
+        <UiButton variant="outline" class="h-11 px-4 gap-2 border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-400 hover:border-emerald-400" @click="handleSaveClick">
           <Icon name="lucide:save" class="h-5 w-5" />
           <span>Save</span>
         </UiButton>
@@ -545,7 +545,7 @@ watch(() => activeTab.value.request.bodyType, (newType) => {
           <ClientOnly>
             <CodeEditor
               :model-value="activeTab.request.preRequestScript || ''"
-              language="text"
+              language="javascript"
               min-height="250px"
               placeholder="// Example: istek.variables.set('timestamp', Date.now().toString())"
               @update:model-value="store.updateActiveRequest({ preRequestScript: $event })"
@@ -571,7 +571,7 @@ watch(() => activeTab.value.request.bodyType, (newType) => {
           <ClientOnly>
             <CodeEditor
               :model-value="activeTab.request.postRequestScript || ''"
-              language="text"
+              language="javascript"
               min-height="250px"
               placeholder="// Example: const data = istek.response.json(); istek.variables.set('token', data.token)"
               @update:model-value="store.updateActiveRequest({ postRequestScript: $event })"

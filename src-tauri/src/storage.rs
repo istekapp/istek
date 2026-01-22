@@ -149,7 +149,7 @@ pub struct WorkspaceConfig {
     pub id: String,
     #[serde(default)]
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing, default)]  // Never serialize sync_path - it's machine-specific, but allow deserialize for backwards compat
     pub sync_path: Option<String>,
     #[serde(default)]
     pub is_default: bool,
@@ -192,6 +192,26 @@ pub struct McpServersFile {
 pub struct TestRunsFile {
     #[serde(default)]
     pub runs: Vec<TestRunHistory>,
+}
+
+// ============ Sensitive Values (Encrypted) ============
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SensitiveValue {
+    pub key: String,
+    pub encrypted_value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SensitiveValuesFile {
+    #[serde(default)]
+    pub values: Vec<SensitiveValue>,
 }
 
 // ============ AppData (for frontend compatibility) ============
@@ -288,6 +308,10 @@ impl Storage {
 
     fn test_runs_path(&self) -> PathBuf {
         self.config_dir.join("test-runs.yaml")
+    }
+
+    fn sensitive_values_path(&self, workspace_id: &str) -> PathBuf {
+        self.workspace_dir(workspace_id).join("sensitive-values.yaml")
     }
 
     // ============ YAML Helpers ============
@@ -675,7 +699,7 @@ impl Storage {
         fs::create_dir_all(&environments_dir)
             .map_err(|e| format!("Failed to create environments directory: {}", e))?;
         
-        // Remove old file if exists with different name
+        // Remove old file if exists with different name (handle renames)
         if let Ok(entries) = fs::read_dir(&environments_dir) {
             for entry in entries.filter_map(|e| e.ok()) {
                 let path = entry.path();
@@ -689,9 +713,22 @@ impl Storage {
             }
         }
         
+        // Create a copy with secret values cleared for git sync
+        // Keep the variable metadata (id, key, isSecret flag) but clear the value
+        let mut env_to_save = environment.clone();
+        env_to_save.variables = env_to_save.variables.into_iter()
+            .map(|mut v| {
+                if v.is_secret {
+                    // Clear the value for secret variables - actual value is in sensitive-values.yaml
+                    v.value = String::new();
+                }
+                v
+            })
+            .collect();
+        
         let filename = Self::environment_filename(&environment.name);
         let path = environments_dir.join(filename);
-        self.write_yaml(&path, environment)
+        self.write_yaml(&path, &env_to_save)
     }
 
     pub fn delete_environment(&self, workspace_id: &str, environment_id: &str) -> Result<(), String> {
@@ -763,11 +800,18 @@ impl Storage {
     pub fn save_global_variable(&self, workspace_id: &str, variable: &Variable) -> Result<(), String> {
         let mut file: GlobalVariablesFile = self.read_yaml(&self.global_variables_path(workspace_id))?;
         
+        // Create a copy with value cleared if it's a secret variable
+        // The actual encrypted value is stored in sensitive-values.yaml
+        let mut var_to_save = variable.clone();
+        if var_to_save.is_secret {
+            var_to_save.value = String::new();
+        }
+        
         // Update or insert
         if let Some(existing) = file.variables.iter_mut().find(|v| v.id == variable.id) {
-            *existing = variable.clone();
+            *existing = var_to_save;
         } else {
-            file.variables.push(variable.clone());
+            file.variables.push(var_to_save);
         }
         
         self.write_yaml(&self.global_variables_path(workspace_id), &file)
@@ -780,8 +824,19 @@ impl Storage {
     }
 
     pub fn save_all_global_variables(&self, workspace_id: &str, variables: &[Variable]) -> Result<(), String> {
+        // Clear values for secret variables before saving
+        let vars_to_save: Vec<Variable> = variables.iter()
+            .map(|v| {
+                let mut var = v.clone();
+                if var.is_secret {
+                    var.value = String::new();
+                }
+                var
+            })
+            .collect();
+        
         let file = GlobalVariablesFile {
-            variables: variables.to_vec(),
+            variables: vars_to_save,
         };
         self.write_yaml(&self.global_variables_path(workspace_id), &file)
     }
@@ -900,6 +955,42 @@ impl Storage {
     pub fn clear_test_runs(&self) -> Result<(), String> {
         let file = TestRunsFile { runs: Vec::new() };
         self.write_yaml(&self.test_runs_path(), &file)
+    }
+
+    // ============ Sensitive Values Operations (Workspace-scoped) ============
+
+    pub fn get_sensitive_values(&self, workspace_id: &str) -> Result<Vec<SensitiveValue>, String> {
+        let file: SensitiveValuesFile = self.read_yaml(&self.sensitive_values_path(workspace_id))?;
+        Ok(file.values)
+    }
+
+    pub fn get_sensitive_value(&self, workspace_id: &str, key: &str) -> Result<Option<SensitiveValue>, String> {
+        let values = self.get_sensitive_values(workspace_id)?;
+        Ok(values.into_iter().find(|v| v.key == key))
+    }
+
+    pub fn save_sensitive_value(&self, workspace_id: &str, value: &SensitiveValue) -> Result<(), String> {
+        let mut file: SensitiveValuesFile = self.read_yaml(&self.sensitive_values_path(workspace_id))?;
+        
+        // Update or insert
+        if let Some(existing) = file.values.iter_mut().find(|v| v.key == value.key) {
+            *existing = value.clone();
+        } else {
+            file.values.push(value.clone());
+        }
+        
+        self.write_yaml(&self.sensitive_values_path(workspace_id), &file)
+    }
+
+    pub fn delete_sensitive_value(&self, workspace_id: &str, key: &str) -> Result<(), String> {
+        let mut file: SensitiveValuesFile = self.read_yaml(&self.sensitive_values_path(workspace_id))?;
+        file.values.retain(|v| v.key != key);
+        self.write_yaml(&self.sensitive_values_path(workspace_id), &file)
+    }
+
+    pub fn clear_sensitive_values(&self, workspace_id: &str) -> Result<(), String> {
+        let file = SensitiveValuesFile { values: Vec::new() };
+        self.write_yaml(&self.sensitive_values_path(workspace_id), &file)
     }
 
     // ============ Load All Data ============

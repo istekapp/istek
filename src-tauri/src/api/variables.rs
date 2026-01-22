@@ -87,7 +87,7 @@ pub struct UpdateVariableRequest {
         ("offset" = Option<i64>, Query, description = "Number of items to skip (default: 0)")
     ),
     responses(
-        (status = 200, description = "List of variables", body = PaginatedResponse<VariableResponse>)
+        (status = 200, description = "List of variables", body = PaginatedResponseSchema)
     ),
     tag = "Variables"
 )]

@@ -1,11 +1,13 @@
 use axum::{
-    extract::{Path, State, WebSocketUpgrade},
-    http::StatusCode,
+    body::Bytes,
+    extract::{Path, Query, State, WebSocketUpgrade},
+    http::{HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response, sse::{Event, KeepAlive, Sse}},
-    routing::{get, post},
+    routing::{get, post, any},
     Json, Router,
 };
 use axum::extract::ws::{Message, WebSocket};
+use std::collections::HashMap;
 use futures_util::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -52,6 +54,20 @@ impl<T: Serialize> ApiResponse<T> {
             error: Some(message.to_string()),
         }
     }
+}
+
+/// Echo response - returns all request details
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EchoResponse {
+    pub method: String,
+    pub path: String,
+    pub query_params: HashMap<String, String>,
+    pub headers: HashMap<String, String>,
+    pub body: Option<serde_json::Value>,
+    pub body_raw: Option<String>,
+    pub timestamp: String,
+    pub content_length: usize,
 }
 
 /// Generate OpenAPI spec dynamically to avoid raw string issues
@@ -208,6 +224,118 @@ fn generate_openapi_spec() -> serde_json::Value {
                         }
                     }
                 }
+            },
+            "/echo": {
+                "get": {
+                    "summary": "Echo GET request",
+                    "description": "Returns all request details including headers, query params",
+                    "operationId": "echoGet",
+                    "tags": ["Echo"],
+                    "parameters": [
+                        {
+                            "name": "any",
+                            "in": "query",
+                            "description": "Any query parameter - all will be echoed back",
+                            "schema": { "type": "string" }
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Echo response",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/EchoResponse" }
+                                }
+                            }
+                        }
+                    }
+                },
+                "post": {
+                    "summary": "Echo POST request",
+                    "description": "Returns all request details including headers, body, query params",
+                    "operationId": "echoPost",
+                    "tags": ["Echo"],
+                    "requestBody": {
+                        "description": "Any request body - will be echoed back",
+                        "content": {
+                            "application/json": {
+                                "schema": { "type": "object" }
+                            },
+                            "text/plain": {
+                                "schema": { "type": "string" }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Echo response",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/EchoResponse" }
+                                }
+                            }
+                        }
+                    }
+                },
+                "put": {
+                    "summary": "Echo PUT request",
+                    "operationId": "echoPut",
+                    "tags": ["Echo"],
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": { "type": "object" }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Echo response",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/EchoResponse" }
+                                }
+                            }
+                        }
+                    }
+                },
+                "patch": {
+                    "summary": "Echo PATCH request",
+                    "operationId": "echoPatch",
+                    "tags": ["Echo"],
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": { "type": "object" }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Echo response",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/EchoResponse" }
+                                }
+                            }
+                        }
+                    }
+                },
+                "delete": {
+                    "summary": "Echo DELETE request",
+                    "operationId": "echoDelete",
+                    "tags": ["Echo"],
+                    "responses": {
+                        "200": {
+                            "description": "Echo response",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/EchoResponse" }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         },
         "components": {
@@ -234,6 +362,48 @@ fn generate_openapi_spec() -> serde_json::Value {
                         "description": { "type": "string" }
                     },
                     "required": ["name", "price", "category"]
+                },
+                "EchoResponse": {
+                    "type": "object",
+                    "description": "Echo response containing all request details",
+                    "properties": {
+                        "method": { 
+                            "type": "string",
+                            "description": "HTTP method used (GET, POST, PUT, PATCH, DELETE, etc.)"
+                        },
+                        "path": { 
+                            "type": "string",
+                            "description": "Request path"
+                        },
+                        "queryParams": { 
+                            "type": "object",
+                            "additionalProperties": { "type": "string" },
+                            "description": "Query parameters as key-value pairs"
+                        },
+                        "headers": { 
+                            "type": "object",
+                            "additionalProperties": { "type": "string" },
+                            "description": "Request headers as key-value pairs"
+                        },
+                        "body": { 
+                            "type": "object",
+                            "description": "Request body parsed as JSON (if valid JSON)"
+                        },
+                        "bodyRaw": { 
+                            "type": "string",
+                            "description": "Raw request body as string"
+                        },
+                        "timestamp": { 
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "Server timestamp when request was received"
+                        },
+                        "contentLength": { 
+                            "type": "integer",
+                            "description": "Content length of request body in bytes"
+                        }
+                    },
+                    "required": ["method", "path", "queryParams", "headers", "timestamp", "contentLength"]
                 }
             }
         }
@@ -255,6 +425,9 @@ pub fn create_http_router(data: Arc<PlaygroundData>) -> Router {
         .route("/api/products", get(list_products).post(create_product))
         .route("/api/products/{id}", get(get_product).put(update_product).delete(delete_product))
         .route("/api/reset", post(reset_data))
+        // Echo endpoint - accepts any HTTP method and returns request details
+        .route("/echo", any(echo_handler))
+        .route("/echo/*path", any(echo_handler))
         // OpenAPI spec
         .route("/openapi.json", get(openapi_spec))
         // WebSocket echo
@@ -363,6 +536,53 @@ async fn openapi_spec() -> Json<serde_json::Value> {
     Json(generate_openapi_spec())
 }
 
+// --- Echo Handler ---
+
+/// Echo endpoint that returns all request details
+/// Accepts any HTTP method (GET, POST, PUT, PATCH, DELETE, etc.)
+async fn echo_handler(
+    method: Method,
+    uri: Uri,
+    Query(query_params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Json<EchoResponse> {
+    // Convert headers to HashMap
+    let headers_map: HashMap<String, String> = headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value.to_str().ok().map(|v| (name.to_string(), v.to_string()))
+        })
+        .collect();
+
+    // Try to parse body as JSON, fallback to raw string
+    let body_str = String::from_utf8_lossy(&body).to_string();
+    let body_json: Option<serde_json::Value> = if !body.is_empty() {
+        serde_json::from_slice(&body).ok()
+    } else {
+        None
+    };
+    
+    let body_raw = if !body.is_empty() && body_json.is_none() {
+        Some(body_str)
+    } else if !body.is_empty() {
+        Some(body_str)
+    } else {
+        None
+    };
+
+    Json(EchoResponse {
+        method: method.to_string(),
+        path: uri.path().to_string(),
+        query_params,
+        headers: headers_map,
+        body: body_json,
+        body_raw,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        content_length: body.len(),
+    })
+}
+
 async fn health_check() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "healthy",
@@ -377,6 +597,7 @@ async fn root_info() -> Json<serde_json::Value> {
         "version": "1.0.0",
         "endpoints": {
             "rest": "/api/products",
+            "echo": "/echo",
             "graphql": "/graphql",
             "websocket": "/ws/echo",
             "sse": {

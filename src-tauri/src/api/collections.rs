@@ -100,7 +100,7 @@ pub struct UpdateRequestRequest {
         ("offset" = Option<i64>, Query, description = "Number of items to skip (default: 0)")
     ),
     responses(
-        (status = 200, description = "List of collections", body = PaginatedResponse<CollectionResponse>)
+        (status = 200, description = "List of collections", body = PaginatedResponseSchema)
     ),
     tag = "Collections"
 )]

@@ -97,13 +97,11 @@ const selectedFolder = computed(() => {
 
 // Get HTTP requests from selected source
 const testableRequests = computed(() => {
-  if (selectedFolderId.value && selectedFolder.value) {
-    return selectedFolder.value.requests.filter(r => r.protocol === 'http') as HttpRequest[]
-  }
+  let requests: HttpRequest[] = []
   
-  if (selectedCollection.value) {
-    const requests: HttpRequest[] = []
-    
+  if (selectedFolderId.value && selectedFolder.value) {
+    requests = selectedFolder.value.requests.filter(r => r.protocol === 'http') as HttpRequest[]
+  } else if (selectedCollection.value) {
     // Add root requests
     selectedCollection.value.requests
       .filter(r => r.protocol === 'http')
@@ -115,12 +113,119 @@ const testableRequests = computed(() => {
         .filter(r => r.protocol === 'http')
         .forEach(r => requests.push(r as HttpRequest))
     })
-    
-    return requests
   }
   
-  return []
+  // Sort by testOrder (undefined values go to end, maintaining original order)
+  return requests.sort((a, b) => {
+    const orderA = a.testOrder ?? Number.MAX_SAFE_INTEGER
+    const orderB = b.testOrder ?? Number.MAX_SAFE_INTEGER
+    return orderA - orderB
+  })
 })
+
+// Dragging state for reordering
+const draggedRequestId = ref<string | null>(null)
+const dragOverRequestId = ref<string | null>(null)
+
+const handleDragStart = (e: DragEvent, requestId: string) => {
+  draggedRequestId.value = requestId
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', requestId)
+  }
+}
+
+const handleDragOver = (e: DragEvent, requestId: string) => {
+  e.preventDefault()
+  if (draggedRequestId.value !== requestId) {
+    dragOverRequestId.value = requestId
+  }
+}
+
+const handleDragLeave = () => {
+  dragOverRequestId.value = null
+}
+
+const handleDrop = async (e: DragEvent, targetRequestId: string) => {
+  e.preventDefault()
+  dragOverRequestId.value = null
+  
+  if (!draggedRequestId.value || draggedRequestId.value === targetRequestId) {
+    draggedRequestId.value = null
+    return
+  }
+  
+  // Reorder requests
+  const requests = [...testableRequests.value]
+  const draggedIndex = requests.findIndex(r => r.id === draggedRequestId.value)
+  const targetIndex = requests.findIndex(r => r.id === targetRequestId)
+  
+  if (draggedIndex === -1 || targetIndex === -1) {
+    draggedRequestId.value = null
+    return
+  }
+  
+  // Move dragged item to target position
+  const [draggedItem] = requests.splice(draggedIndex, 1)
+  requests.splice(targetIndex, 0, draggedItem)
+  
+  // Update testOrder for all requests
+  requests.forEach((request, index) => {
+    request.testOrder = index
+  })
+  
+  // Save updated testOrder to collection
+  await saveTestOrder(requests)
+  
+  draggedRequestId.value = null
+}
+
+const handleDragEnd = () => {
+  draggedRequestId.value = null
+  dragOverRequestId.value = null
+}
+
+// Save updated testOrder to collection
+const saveTestOrder = async (orderedRequests: HttpRequest[]) => {
+  if (!selectedCollection.value) return
+  
+  // Create a map of request ID to new testOrder
+  const orderMap = new Map<string, number>()
+  orderedRequests.forEach((r, index) => {
+    orderMap.set(r.id, index)
+  })
+  
+  // Update the collection's requests with new testOrder
+  const updatedCollection = { ...selectedCollection.value }
+  
+  // Update root requests
+  updatedCollection.requests = updatedCollection.requests.map((r: any) => {
+    if (orderMap.has(r.id)) {
+      return { ...r, testOrder: orderMap.get(r.id) }
+    }
+    return r
+  })
+  
+  // Update folder requests
+  if (updatedCollection.folders) {
+    updatedCollection.folders = updatedCollection.folders.map((folder: CollectionFolder) => ({
+      ...folder,
+      requests: folder.requests.map((r: any) => {
+        if (orderMap.has(r.id)) {
+          return { ...r, testOrder: orderMap.get(r.id) }
+        }
+        return r
+      })
+    }))
+  }
+  
+  // Save to store and database
+  try {
+    await store.updateCollection(updatedCollection)
+  } catch (e) {
+    console.error('Failed to save test order:', e)
+  }
+}
 
 // Get or initialize request config
 const getRequestConfig = (requestId: string) => {
@@ -465,7 +570,7 @@ const assertionTypes: { value: AssertionType; label: string }[] = [
             <div class="p-4 border-b border-border">
               <div class="flex items-center justify-between">
                 <h3 class="font-medium">Requests to Test ({{ testableRequests.length }})</h3>
-                <span class="text-xs text-muted-foreground">Click to configure assertions</span>
+                <span class="text-xs text-muted-foreground">Drag to reorder • Click to configure</span>
               </div>
             </div>
             
@@ -473,27 +578,47 @@ const assertionTypes: { value: AssertionType; label: string }[] = [
             <UiScrollArea class="flex-1 px-4">
               <div class="space-y-2 py-4">
                 <div
-                  v-for="request in testableRequests"
+                  v-for="(request, index) in testableRequests"
                   :key="request.id"
-                  class="rounded-lg border border-border overflow-hidden"
+                  :class="[
+                    'rounded-lg border overflow-hidden transition-all',
+                    dragOverRequestId === request.id ? 'border-primary border-2 bg-primary/5' : 'border-border',
+                    draggedRequestId === request.id ? 'opacity-50' : ''
+                  ]"
+                  draggable="true"
+                  @dragstart="handleDragStart($event, request.id)"
+                  @dragover="handleDragOver($event, request.id)"
+                  @dragleave="handleDragLeave"
+                  @drop="handleDrop($event, request.id)"
+                  @dragend="handleDragEnd"
                 >
                   <!-- Request Header -->
-                  <button
-                    class="w-full p-3 flex items-center gap-3 hover:bg-accent/50 transition-colors"
-                    @click="expandedRequestId = expandedRequestId === request.id ? null : request.id"
+                  <div
+                    class="w-full p-3 flex items-center gap-3 hover:bg-accent/50 transition-colors cursor-move"
                   >
-                    <Icon 
-                      :name="expandedRequestId === request.id ? 'lucide:chevron-down' : 'lucide:chevron-right'" 
-                      class="h-4 w-4 text-muted-foreground" 
-                    />
-                    <span :class="['font-mono text-sm font-semibold w-16', getMethodColor(request.method)]">
-                      {{ request.method }}
-                    </span>
-                    <span class="text-sm flex-1 truncate text-left">{{ request.name }}</span>
-                    <span class="text-xs text-muted-foreground">
-                      {{ getRequestConfig(request.id).assertions.length }} assertions
-                    </span>
-                  </button>
+                    <!-- Drag Handle -->
+                    <Icon name="lucide:grip-vertical" class="h-4 w-4 text-muted-foreground/50" />
+                    
+                    <!-- Order Number -->
+                    <span class="text-xs text-muted-foreground w-5">{{ index + 1 }}</span>
+                    
+                    <button
+                      class="flex items-center gap-3 flex-1"
+                      @click.stop="expandedRequestId = expandedRequestId === request.id ? null : request.id"
+                    >
+                      <Icon 
+                        :name="expandedRequestId === request.id ? 'lucide:chevron-down' : 'lucide:chevron-right'" 
+                        class="h-4 w-4 text-muted-foreground" 
+                      />
+                      <span :class="['font-mono text-sm font-semibold w-16', getMethodColor(request.method)]">
+                        {{ request.method }}
+                      </span>
+                      <span class="text-sm flex-1 truncate text-left">{{ request.name }}</span>
+                      <span class="text-xs text-muted-foreground">
+                        {{ getRequestConfig(request.id).assertions.length }} assertions
+                      </span>
+                    </button>
+                  </div>
                   
                   <!-- Expanded Configuration -->
                   <div v-if="expandedRequestId === request.id" class="border-t border-border bg-muted/30 p-4 space-y-4">

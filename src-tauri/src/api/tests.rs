@@ -197,107 +197,192 @@ fn generate_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// Parsed request with test order for sorting
+struct ParsedRequest {
+    request: TestRequest,
+    test_order: Option<i64>,
+}
+
 /// Parse a JSON request object into a TestRequest struct
-fn parse_request_json(r: &Value) -> Option<TestRequest> {
-    Some(TestRequest {
-        id: r.get("id")?.as_str()?.to_string(),
-        name: r.get("name")?.as_str()?.to_string(),
-        method: r.get("method")?.as_str()?.to_string(),
-        url: r.get("url")?.as_str()?.to_string(),
-        headers: r.get("headers")
-            .and_then(|h| h.as_array())
-            .map(|arr| arr.iter().filter_map(|h| {
-                Some(KeyValue {
-                    key: h.get("key")?.as_str()?.to_string(),
-                    value: h.get("value")?.as_str()?.to_string(),
-                    enabled: h.get("enabled")?.as_bool()?,
-                })
-            }).collect())
-            .unwrap_or_default(),
-        params: r.get("params")
-            .and_then(|p| p.as_array())
-            .map(|arr| arr.iter().filter_map(|p| {
-                Some(KeyValue {
-                    key: p.get("key")?.as_str()?.to_string(),
-                    value: p.get("value")?.as_str()?.to_string(),
-                    enabled: p.get("enabled")?.as_bool()?,
-                })
-            }).collect())
-            .unwrap_or_default(),
-        body: r.get("body").and_then(|b| b.as_str()).map(|s| s.to_string()),
-        body_type: r.get("bodyType").and_then(|b| b.as_str()).unwrap_or("none").to_string(),
-        assertions: r.get("assertions")
-            .and_then(|a| a.as_array())
-            .map(|arr| arr.iter().filter_map(|a| {
-                Some(Assertion {
-                    id: a.get("id")?.as_str()?.to_string(),
-                    assertion_type: serde_json::from_value(a.get("type")?.clone()).ok()?,
-                    enabled: a.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
-                    expected_status: a.get("expectedStatus").and_then(|v| v.as_u64()).map(|v| v as u16),
-                    min_status: a.get("minStatus").and_then(|v| v.as_u64()).map(|v| v as u16),
-                    max_status: a.get("maxStatus").and_then(|v| v.as_u64()).map(|v| v as u16),
-                    json_path: a.get("jsonPath").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    operator: a.get("operator").and_then(|v| serde_json::from_value(v.clone()).ok()),
-                    expected_value: a.get("expectedValue").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    search_string: a.get("searchString").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    max_time_ms: a.get("maxTimeMs").and_then(|v| v.as_u64()),
-                    header_name: a.get("headerName").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    header_value: a.get("headerValue").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                })
-            }).collect()),
-        extract_variables: r.get("extractVariables")
-            .and_then(|e| e.as_array())
-            .map(|arr| arr.iter().filter_map(|e| {
-                Some(VariableExtraction {
-                    id: e.get("id")?.as_str()?.to_string(),
-                    variable_name: e.get("variableName")?.as_str()?.to_string(),
-                    json_path: e.get("jsonPath")?.as_str()?.to_string(),
-                    enabled: e.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
-                })
-            }).collect()),
+fn parse_request_json(r: &Value) -> Option<ParsedRequest> {
+    let test_order = r.get("testOrder").and_then(|v| v.as_i64());
+    
+    // Test config can be stored either at root level or inside "testConfig" object
+    let test_config = r.get("testConfig");
+    
+    // Helper to get assertions - check testConfig first, then root level
+    let assertions_array = test_config
+        .and_then(|tc| tc.get("assertions"))
+        .or_else(|| r.get("assertions"))
+        .and_then(|a| a.as_array());
+    
+    // Helper to get extractVariables - check testConfig first, then root level
+    let extract_vars_array = test_config
+        .and_then(|tc| tc.get("extractVariables"))
+        .or_else(|| r.get("extractVariables"))
+        .and_then(|e| e.as_array());
+    
+    Some(ParsedRequest {
+        test_order,
+        request: TestRequest {
+            id: r.get("id")?.as_str()?.to_string(),
+            name: r.get("name")?.as_str()?.to_string(),
+            method: r.get("method")?.as_str()?.to_string(),
+            url: r.get("url")?.as_str()?.to_string(),
+            headers: r.get("headers")
+                .and_then(|h| h.as_array())
+                .map(|arr| arr.iter().filter_map(|h| {
+                    Some(KeyValue {
+                        key: h.get("key")?.as_str()?.to_string(),
+                        value: h.get("value")?.as_str()?.to_string(),
+                        enabled: h.get("enabled")?.as_bool()?,
+                    })
+                }).collect())
+                .unwrap_or_default(),
+            params: r.get("params")
+                .and_then(|p| p.as_array())
+                .map(|arr| arr.iter().filter_map(|p| {
+                    Some(KeyValue {
+                        key: p.get("key")?.as_str()?.to_string(),
+                        value: p.get("value")?.as_str()?.to_string(),
+                        enabled: p.get("enabled")?.as_bool()?,
+                    })
+                }).collect())
+                .unwrap_or_default(),
+            body: r.get("body").and_then(|b| b.as_str()).map(|s| s.to_string()),
+            body_type: r.get("bodyType").and_then(|b| b.as_str()).unwrap_or("none").to_string(),
+            assertions: assertions_array
+                .map(|arr| arr.iter().filter_map(|a| {
+                    Some(Assertion {
+                        id: a.get("id")?.as_str()?.to_string(),
+                        assertion_type: serde_json::from_value(a.get("type")?.clone()).ok()?,
+                        enabled: a.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+                        expected_status: a.get("expectedStatus").and_then(|v| v.as_u64()).map(|v| v as u16),
+                        min_status: a.get("minStatus").and_then(|v| v.as_u64()).map(|v| v as u16),
+                        max_status: a.get("maxStatus").and_then(|v| v.as_u64()).map(|v| v as u16),
+                        json_path: a.get("jsonPath").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        operator: a.get("operator").and_then(|v| serde_json::from_value(v.clone()).ok()),
+                        expected_value: a.get("expectedValue").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        search_string: a.get("searchString").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        max_time_ms: a.get("maxTimeMs").and_then(|v| v.as_u64()),
+                        header_name: a.get("headerName").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        header_value: a.get("headerValue").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    })
+                }).collect()),
+            extract_variables: extract_vars_array
+                .map(|arr| arr.iter().filter_map(|e| {
+                    Some(VariableExtraction {
+                        id: e.get("id")?.as_str()?.to_string(),
+                        variable_name: e.get("variableName")?.as_str()?.to_string(),
+                        json_path: e.get("jsonPath")?.as_str()?.to_string(),
+                        enabled: e.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+                    })
+                }).collect()),
+        },
     })
 }
 
 /// Parse requests from JSON including folders
-fn parse_all_requests(requests_json: &str, folders_json: Option<&str>) -> Vec<TestRequest> {
-    let mut test_requests: Vec<TestRequest> = Vec::new();
-
-    // Parse root level requests
-    if let Ok(requests_value) = serde_json::from_str::<Value>(requests_json) {
-        if let Some(requests_array) = requests_value.as_array() {
-            for r in requests_array {
-                if let Some(req) = parse_request_json(r) {
-                    test_requests.push(req);
-                }
-            }
-        }
-    }
+/// If folder_id is provided, only requests from that folder (and its subfolders) are included
+/// Requests are sorted by testOrder field (if present)
+fn parse_all_requests(requests_json: &str, folders_json: Option<&str>, folder_id: Option<&str>) -> Vec<TestRequest> {
+    let mut parsed_requests: Vec<ParsedRequest> = Vec::new();
 
     // Parse folders and their requests
     if let Some(folders_str) = folders_json {
         if let Ok(folders_value) = serde_json::from_str::<Value>(folders_str) {
             if let Some(folders_array) = folders_value.as_array() {
+                // If folder_id is specified, find and process only that folder
+                if let Some(target_folder_id) = folder_id {
+                    if let Some(folder) = find_folder_by_id(folders_array, target_folder_id) {
+                        collect_folder_requests(&folder, &mut parsed_requests);
+                    }
+                    // Sort by testOrder and return
+                    parsed_requests.sort_by(|a, b| {
+                        let order_a = a.test_order.unwrap_or(i64::MAX);
+                        let order_b = b.test_order.unwrap_or(i64::MAX);
+                        order_a.cmp(&order_b)
+                    });
+                    return parsed_requests.into_iter().map(|p| p.request).collect();
+                }
+                
+                // No folder filter - collect all folder requests
                 for folder in folders_array {
-                    if let Some(folder_requests) = folder.get("requests").and_then(|r| r.as_array()) {
-                        for r in folder_requests {
-                            if let Some(req) = parse_request_json(r) {
-                                test_requests.push(req);
-                            }
-                        }
+                    collect_folder_requests(folder, &mut parsed_requests);
+                }
+            }
+        }
+    }
+
+    // If folder_id is specified, we already returned above
+    // Only include root level requests when no folder filter is specified
+    if folder_id.is_none() {
+        if let Ok(requests_value) = serde_json::from_str::<Value>(requests_json) {
+            if let Some(requests_array) = requests_value.as_array() {
+                for r in requests_array {
+                    if let Some(parsed) = parse_request_json(r) {
+                        parsed_requests.push(parsed);
                     }
                 }
             }
         }
     }
 
-    test_requests
+    // Sort by testOrder (requests without testOrder go to end)
+    parsed_requests.sort_by(|a, b| {
+        let order_a = a.test_order.unwrap_or(i64::MAX);
+        let order_b = b.test_order.unwrap_or(i64::MAX);
+        order_a.cmp(&order_b)
+    });
+
+    parsed_requests.into_iter().map(|p| p.request).collect()
+}
+
+/// Find a folder by ID in the folder tree (including nested folders)
+fn find_folder_by_id<'a>(folders: &'a [Value], folder_id: &str) -> Option<&'a Value> {
+    for folder in folders {
+        if let Some(id) = folder.get("id").and_then(|v| v.as_str()) {
+            if id == folder_id {
+                return Some(folder);
+            }
+        }
+        // Check nested folders
+        if let Some(subfolders) = folder.get("folders").and_then(|f| f.as_array()) {
+            if let Some(found) = find_folder_by_id(subfolders, folder_id) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Recursively collect all requests from a folder and its subfolders
+fn collect_folder_requests(folder: &Value, parsed_requests: &mut Vec<ParsedRequest>) {
+    // Collect requests from this folder
+    if let Some(folder_requests) = folder.get("requests").and_then(|r| r.as_array()) {
+        for r in folder_requests {
+            if let Some(parsed) = parse_request_json(r) {
+                parsed_requests.push(parsed);
+            }
+        }
+    }
+    
+    // Recursively collect from subfolders
+    if let Some(subfolders) = folder.get("folders").and_then(|f| f.as_array()) {
+        for subfolder in subfolders {
+            collect_folder_requests(subfolder, parsed_requests);
+        }
+    }
 }
 
 fn substitute_variables(text: &str, variables: &HashMap<String, String>) -> String {
     let mut result = text.to_string();
     for (key, value) in variables {
-        let pattern = format!("{{{{{}}}}}", key);
-        result = result.replace(&pattern, value);
+        // Support both {{variableName}} and {variableName} formats
+        let double_brace_pattern = format!("{{{{{}}}}}", key);
+        let single_brace_pattern = format!("{{{}}}", key);
+        result = result.replace(&double_brace_pattern, value);
+        result = result.replace(&single_brace_pattern, value);
     }
     result
 }
@@ -833,15 +918,44 @@ pub async fn run_collection_tests(
     let folders_json = collection.folders.as_ref()
         .map(|f| serde_json::to_string(f).unwrap_or_default());
 
-    let test_requests = parse_all_requests(&requests_json, folders_json.as_deref());
+    let test_requests = parse_all_requests(&requests_json, folders_json.as_deref(), request.folder_id.as_deref());
 
     if test_requests.is_empty() {
-        return Err(ApiError::bad_request("Collection has no requests to test"));
+        let error_msg = if request.folder_id.is_some() {
+            "Folder has no requests to test"
+        } else {
+            "Collection has no requests to test"
+        };
+        return Err(ApiError::bad_request(error_msg));
     }
 
-    // Run tests
+    // Run tests - include folder name in test name if filtering by folder
+    let test_name = if let Some(ref folder_id) = request.folder_id {
+        // Try to find folder name
+        if let Some(folders_str) = &folders_json {
+            if let Ok(folders_value) = serde_json::from_str::<Value>(folders_str) {
+                if let Some(folders_array) = folders_value.as_array() {
+                    if let Some(folder) = find_folder_by_id(folders_array, folder_id) {
+                        let folder_name = folder.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown Folder");
+                        format!("{} / {}", collection.name, folder_name)
+                    } else {
+                        collection.name.clone()
+                    }
+                } else {
+                    collection.name.clone()
+                }
+            } else {
+                collection.name.clone()
+            }
+        } else {
+            collection.name.clone()
+        }
+    } else {
+        collection.name.clone()
+    };
+
     let run_request = RunTestsRequest {
-        name: collection.name,
+        name: test_name,
         requests: test_requests,
         stop_on_failure: request.stop_on_failure,
         delay_between_requests: request.delay_between_requests,
@@ -860,6 +974,9 @@ pub struct RunCollectionTestsRequest {
     pub delay_between_requests: u64,
     #[serde(default)]
     pub variables: HashMap<String, String>,
+    /// Optional folder ID to filter tests to a specific folder
+    #[serde(default)]
+    pub folder_id: Option<String>,
 }
 
 // ============ SSE Streaming Types ============
@@ -908,15 +1025,44 @@ pub async fn run_collection_tests_stream(
         .map(|f| serde_json::to_string(f).unwrap_or_default());
     let collection_name = collection.name;
 
-    let test_requests = parse_all_requests(&requests_json, folders_json.as_deref());
+    let test_requests = parse_all_requests(&requests_json, folders_json.as_deref(), request.folder_id.as_deref());
 
     if test_requests.is_empty() {
-        return Err(ApiError::bad_request("Collection has no requests to test"));
+        let error_msg = if request.folder_id.is_some() {
+            "Folder has no requests to test"
+        } else {
+            "Collection has no requests to test"
+        };
+        return Err(ApiError::bad_request(error_msg));
     }
+
+    // Include folder name in test name if filtering by folder
+    let test_name = if let Some(ref folder_id) = request.folder_id {
+        if let Some(ref folders_str) = folders_json {
+            if let Ok(folders_value) = serde_json::from_str::<Value>(folders_str) {
+                if let Some(folders_array) = folders_value.as_array() {
+                    if let Some(folder) = find_folder_by_id(folders_array, folder_id) {
+                        let folder_name = folder.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown Folder");
+                        format!("{} / {}", collection_name, folder_name)
+                    } else {
+                        collection_name.clone()
+                    }
+                } else {
+                    collection_name.clone()
+                }
+            } else {
+                collection_name.clone()
+            }
+        } else {
+            collection_name.clone()
+        }
+    } else {
+        collection_name.clone()
+    };
 
     let run_id = generate_id();
     let total = test_requests.len();
-    let name = collection_name.clone();
+    let name = test_name;
     let stop_on_failure = request.stop_on_failure;
     let delay = request.delay_between_requests;
     let variables = request.variables.clone();

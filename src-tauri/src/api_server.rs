@@ -16,7 +16,7 @@ use crate::api::{
     integrations::{self, IntegrationResponse, CreateIntegrationRequest, UpdateIntegrationRequest, TestIntegrationRequest, TestIntegrationResponse, FetchSecretRequest, FetchSecretResponse},
     history::{self, HistoryItemResponse},
     tests::{self, RunTestsRequest, RunCollectionTestsRequest, TestRunSummary, TestResult, TestRequest, Assertion, AssertionResult, KeyValue as TestKeyValue, TestStatus, AssertionType, JsonPathOperator, VariableExtraction, ExtractedVariable},
-    ApiError, ErrorDetail, SuccessResponse,
+    ApiError, ErrorDetail, SuccessResponse, PaginatedResponseSchema,
 };
 use crate::storage::Storage;
 
@@ -80,6 +80,7 @@ const API_PORT: u16 = 47835; // ISTEK in phone keypad: I=4, S=7, T=8, E=3, K=5
             ApiError,
             ErrorDetail,
             SuccessResponse,
+            PaginatedResponseSchema,
             // Health
             HealthResponse,
             // Workspaces

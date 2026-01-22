@@ -90,13 +90,11 @@ const selectedFolder = computed(() => {
 
 // Get HTTP requests from selected source
 const testableRequests = computed(() => {
-  if (selectedFolderId.value && selectedFolder.value) {
-    return selectedFolder.value.requests.filter(r => r.protocol === 'http') as HttpRequest[]
-  }
+  let requests: HttpRequest[] = []
   
-  if (selectedCollection.value) {
-    const requests: HttpRequest[] = []
-    
+  if (selectedFolderId.value && selectedFolder.value) {
+    requests = selectedFolder.value.requests.filter(r => r.protocol === 'http') as HttpRequest[]
+  } else if (selectedCollection.value) {
     // Add root requests
     selectedCollection.value.requests
       .filter(r => r.protocol === 'http')
@@ -108,19 +106,281 @@ const testableRequests = computed(() => {
         .filter(r => r.protocol === 'http')
         .forEach(r => requests.push(r as HttpRequest))
     })
-    
-    return requests
   }
   
-  return []
+  // Sort by testOrder (undefined values go to end, maintaining original order)
+  return requests.sort((a, b) => {
+    const orderA = a.testOrder ?? Number.MAX_SAFE_INTEGER
+    const orderB = b.testOrder ?? Number.MAX_SAFE_INTEGER
+    return orderA - orderB
+  })
 })
 
-// Get or initialize request config
+// Mouse-based dragging state for reordering (HTML5 drag doesn't work well in Tauri)
+const draggedRequestId = ref<string | null>(null)
+const dropTargetId = ref<string | null>(null)
+const dropPosition = ref<'before' | 'after' | null>(null)
+const dragRefs = reactive<Record<string, HTMLElement>>({})
+const isDragging = ref(false)
+const dragStartY = ref(0)
+
+const handleMouseDown = (e: MouseEvent, requestId: string) => {
+  // Only start drag from the grip handle area (first 40px or so)
+  const target = e.target as HTMLElement
+  const isGripArea = target.closest('.drag-handle') !== null
+  
+  if (!isGripArea) return
+  
+  e.preventDefault()
+  draggedRequestId.value = requestId
+  dragStartY.value = e.clientY
+  isDragging.value = false
+  
+  // Add mouse move and up listeners to window
+  window.addEventListener('mousemove', handleMouseMove)
+  window.addEventListener('mouseup', handleMouseUp)
+}
+
+const handleMouseMove = (e: MouseEvent) => {
+  if (!draggedRequestId.value) return
+  
+  // Start dragging after moving a few pixels (prevents accidental drags)
+  if (!isDragging.value && Math.abs(e.clientY - dragStartY.value) > 5) {
+    isDragging.value = true
+  }
+  
+  if (!isDragging.value) return
+  
+  // Find which request element we're over
+  const mouseY = e.clientY
+  let foundTarget = false
+  
+  for (const request of testableRequests.value) {
+    if (request.id === draggedRequestId.value) continue
+    
+    const el = dragRefs[request.id]
+    if (!el) continue
+    
+    const rect = el.getBoundingClientRect()
+    
+    if (mouseY >= rect.top && mouseY <= rect.bottom) {
+      const midY = rect.top + rect.height / 2
+      dropTargetId.value = request.id
+      dropPosition.value = mouseY < midY ? 'before' : 'after'
+      foundTarget = true
+      break
+    }
+  }
+  
+  if (!foundTarget) {
+    // Check if we're below all items
+    const lastRequest = testableRequests.value[testableRequests.value.length - 1]
+    if (lastRequest && lastRequest.id !== draggedRequestId.value) {
+      const el = dragRefs[lastRequest.id]
+      if (el) {
+        const rect = el.getBoundingClientRect()
+        if (mouseY > rect.bottom) {
+          dropTargetId.value = lastRequest.id
+          dropPosition.value = 'after'
+          foundTarget = true
+        }
+      }
+    }
+    
+    // Check if we're above all items
+    const firstRequest = testableRequests.value[0]
+    if (!foundTarget && firstRequest && firstRequest.id !== draggedRequestId.value) {
+      const el = dragRefs[firstRequest.id]
+      if (el) {
+        const rect = el.getBoundingClientRect()
+        if (mouseY < rect.top) {
+          dropTargetId.value = firstRequest.id
+          dropPosition.value = 'before'
+          foundTarget = true
+        }
+      }
+    }
+  }
+  
+  if (!foundTarget) {
+    dropTargetId.value = null
+    dropPosition.value = null
+  }
+}
+
+const handleMouseUp = async () => {
+  // Remove listeners
+  window.removeEventListener('mousemove', handleMouseMove)
+  window.removeEventListener('mouseup', handleMouseUp)
+  
+  if (!isDragging.value || !draggedRequestId.value) {
+    draggedRequestId.value = null
+    dropTargetId.value = null
+    dropPosition.value = null
+    isDragging.value = false
+    return
+  }
+  
+  const draggedId = draggedRequestId.value
+  const targetId = dropTargetId.value
+  const position = dropPosition.value
+  
+  // Reset state
+  draggedRequestId.value = null
+  dropTargetId.value = null
+  dropPosition.value = null
+  isDragging.value = false
+  
+  if (!draggedId || !targetId || draggedId === targetId) {
+    return
+  }
+  
+  // Reorder requests
+  const requests = [...testableRequests.value]
+  const draggedIndex = requests.findIndex(r => r.id === draggedId)
+  let targetIndex = requests.findIndex(r => r.id === targetId)
+  
+  if (draggedIndex === -1 || targetIndex === -1) {
+    return
+  }
+  
+  // Remove dragged item
+  const [draggedItem] = requests.splice(draggedIndex, 1)
+  
+  // Recalculate target index after removal (only if target was after dragged)
+  if (targetIndex > draggedIndex) {
+    targetIndex -= 1
+  }
+  
+  // Insert at the correct position
+  const insertIndex = position === 'after' ? targetIndex + 1 : targetIndex
+  requests.splice(insertIndex, 0, draggedItem)
+  
+  // Update testOrder for all requests
+  requests.forEach((request, index) => {
+    request.testOrder = index
+  })
+  
+  // Save updated testOrder to collection
+  await saveTestOrder(requests)
+}
+
+// Cleanup on unmount
+onUnmounted(() => {
+  window.removeEventListener('mousemove', handleMouseMove)
+  window.removeEventListener('mouseup', handleMouseUp)
+})
+
+// Save updated testOrder to collection
+const saveTestOrder = async (orderedRequests: HttpRequest[]) => {
+  if (!selectedCollection.value) return
+  
+  // Create a map of request ID to new testOrder
+  const orderMap = new Map<string, number>()
+  orderedRequests.forEach((r, index) => {
+    orderMap.set(r.id, index)
+  })
+  
+  // Update the collection's requests with new testOrder
+  const updatedCollection = { ...selectedCollection.value }
+  
+  // Update root requests
+  updatedCollection.requests = updatedCollection.requests.map((r: any) => {
+    if (orderMap.has(r.id)) {
+      return { ...r, testOrder: orderMap.get(r.id) }
+    }
+    return r
+  })
+  
+  // Update folder requests
+  if (updatedCollection.folders) {
+    updatedCollection.folders = updatedCollection.folders.map((folder: CollectionFolder) => ({
+      ...folder,
+      requests: folder.requests.map((r: any) => {
+        if (orderMap.has(r.id)) {
+          return { ...r, testOrder: orderMap.get(r.id) }
+        }
+        return r
+      })
+    }))
+  }
+  
+  // Save to store and database
+  try {
+    await store.updateCollection(updatedCollection)
+  } catch (e) {
+    console.error('Failed to save test order:', e)
+  }
+}
+
+// Get or initialize request config - loads from request's testConfig if available
 const getRequestConfig = (requestId: string) => {
   if (!requestConfigs.value.has(requestId)) {
-    requestConfigs.value.set(requestId, { assertions: [], extractVariables: [] })
+    // Try to load from the request's persisted testConfig
+    const request = testableRequests.value.find(r => r.id === requestId)
+    if (request?.testConfig) {
+      requestConfigs.value.set(requestId, {
+        assertions: [...request.testConfig.assertions],
+        extractVariables: [...request.testConfig.extractVariables]
+      })
+    } else {
+      requestConfigs.value.set(requestId, { assertions: [], extractVariables: [] })
+    }
   }
   return requestConfigs.value.get(requestId)!
+}
+
+// Save test config to the request in the collection
+const saveTestConfig = async (requestId: string) => {
+  if (!selectedCollection.value) return
+  
+  const config = requestConfigs.value.get(requestId)
+  if (!config) return
+  
+  const testConfig = {
+    assertions: config.assertions,
+    extractVariables: config.extractVariables
+  }
+  
+  // Update the collection's requests with the testConfig
+  const updatedCollection = { ...selectedCollection.value }
+  
+  // Update root requests
+  updatedCollection.requests = updatedCollection.requests.map((r: any) => {
+    if (r.id === requestId) {
+      return { ...r, testConfig }
+    }
+    return r
+  })
+  
+  // Update folder requests
+  if (updatedCollection.folders) {
+    updatedCollection.folders = updatedCollection.folders.map((folder: CollectionFolder) => ({
+      ...folder,
+      requests: folder.requests.map((r: any) => {
+        if (r.id === requestId) {
+          return { ...r, testConfig }
+        }
+        return r
+      })
+    }))
+  }
+  
+  // Save to store and database
+  try {
+    await store.updateCollection(updatedCollection)
+  } catch (e) {
+    console.error('Failed to save test config:', e)
+  }
+}
+
+// Debounce saving to avoid too many saves
+let saveTimeout: ReturnType<typeof setTimeout> | null = null
+const debouncedSaveTestConfig = (requestId: string) => {
+  if (saveTimeout) clearTimeout(saveTimeout)
+  saveTimeout = setTimeout(() => {
+    saveTestConfig(requestId)
+  }, 500)
 }
 
 // Assertion management
@@ -132,11 +392,13 @@ const addAssertion = (requestId: string) => {
     enabled: true,
     expectedStatus: 200
   })
+  debouncedSaveTestConfig(requestId)
 }
 
 const removeAssertion = (requestId: string, assertionId: string) => {
   const config = getRequestConfig(requestId)
   config.assertions = config.assertions.filter(a => a.id !== assertionId)
+  debouncedSaveTestConfig(requestId)
 }
 
 // Variable extraction management
@@ -148,11 +410,13 @@ const addExtraction = (requestId: string) => {
     jsonPath: '$.data',
     enabled: true
   })
+  debouncedSaveTestConfig(requestId)
 }
 
 const removeExtraction = (requestId: string, extractionId: string) => {
   const config = getRequestConfig(requestId)
   config.extractVariables = config.extractVariables.filter(e => e.id !== extractionId)
+  debouncedSaveTestConfig(requestId)
 }
 
 const convertToTestRequest = (request: HttpRequest): TestRequest => {
@@ -378,33 +642,55 @@ const assertionTypes: { value: AssertionType; label: string }[] = [
         <div class="flex-1 overflow-hidden flex flex-col">
           <div class="p-4 border-b border-border flex items-center justify-between">
             <h3 class="font-medium">Requests ({{ testableRequests.length }})</h3>
-            <span class="text-xs text-muted-foreground">Click to configure</span>
+            <span class="text-xs text-muted-foreground">Drag to reorder • Click to configure</span>
           </div>
           
-          <UiScrollArea class="flex-1">
-            <div class="p-4 space-y-2">
-              <div
-                v-for="request in testableRequests"
-                :key="request.id"
-                class="rounded-lg border border-border overflow-hidden"
-              >
-                <!-- Request Header -->
-                <button
-                  class="w-full p-3 flex items-center gap-3 hover:bg-accent/50 transition-colors"
-                  @click="expandedRequestId = expandedRequestId === request.id ? null : request.id"
+          <div 
+            class="flex-1 overflow-auto p-4 space-y-1 select-none"
+          >
+              <template v-for="(request, index) in testableRequests" :key="request.id">
+                <!-- Drop indicator line BEFORE this item -->
+                <div 
+                  v-if="dropTargetId === request.id && dropPosition === 'before'"
+                  class="h-1 bg-primary rounded-full mx-2 shadow-[0_0_8px_hsl(var(--primary)/0.5)]"
+                />
+                
+                <div
+                  :ref="el => { if (el) dragRefs[request.id] = el as HTMLElement }"
+                  :class="[
+                    'rounded-lg border overflow-hidden transition-all duration-150',
+                    draggedRequestId === request.id && isDragging ? 'opacity-40 border-dashed border-primary scale-[0.98]' : 'border-border',
+                    dropTargetId === request.id && draggedRequestId !== request.id ? 'ring-2 ring-primary' : ''
+                  ]"
+                  @mousedown="handleMouseDown($event, request.id)"
                 >
-                  <Icon 
-                    :name="expandedRequestId === request.id ? 'lucide:chevron-down' : 'lucide:chevron-right'" 
-                    class="h-4 w-4 text-muted-foreground" 
-                  />
-                  <span :class="['font-mono text-sm font-semibold w-16', getMethodColor(request.method)]">
-                    {{ request.method }}
-                  </span>
-                  <span class="text-sm flex-1 truncate text-left">{{ request.name }}</span>
-                  <span class="text-xs text-muted-foreground">
-                    {{ getRequestConfig(request.id).assertions.length }} assertions
-                  </span>
-                </button>
+                  <!-- Request Header -->
+                  <div class="w-full p-3 flex items-center gap-3 hover:bg-accent/50 transition-colors">
+                    <!-- Drag Handle -->
+                    <div class="drag-handle cursor-grab active:cursor-grabbing p-1 -m-1">
+                      <Icon name="lucide:grip-vertical" class="h-4 w-4 text-muted-foreground/50 shrink-0" />
+                    </div>
+                    
+                    <!-- Order Number -->
+                    <span class="text-xs text-muted-foreground w-4 shrink-0">{{ index + 1 }}</span>
+                    
+                    <button
+                      class="flex items-center gap-3 flex-1 min-w-0"
+                      @click.stop="expandedRequestId = expandedRequestId === request.id ? null : request.id"
+                    >
+                      <Icon 
+                        :name="expandedRequestId === request.id ? 'lucide:chevron-down' : 'lucide:chevron-right'" 
+                        class="h-4 w-4 text-muted-foreground shrink-0" 
+                      />
+                      <span :class="['font-mono text-sm font-semibold w-16 shrink-0', getMethodColor(request.method)]">
+                        {{ request.method }}
+                      </span>
+                      <span class="text-sm flex-1 truncate text-left">{{ request.name }}</span>
+                      <span class="text-xs text-muted-foreground shrink-0">
+                        {{ getRequestConfig(request.id).assertions.length }} assertions
+                      </span>
+                    </button>
+                  </div>
                 
                 <!-- Expanded Configuration -->
                 <div v-if="expandedRequestId === request.id" class="border-t border-border bg-muted/30 p-4 space-y-4">
@@ -427,11 +713,12 @@ const assertionTypes: { value: AssertionType; label: string }[] = [
                         :key="assertion.id"
                         class="flex items-center gap-2 p-2 bg-background rounded border border-border"
                       >
-                        <input type="checkbox" v-model="assertion.enabled" class="accent-primary" />
+                        <input type="checkbox" v-model="assertion.enabled" class="accent-primary" @change="debouncedSaveTestConfig(request.id)" />
                         
                         <select
                           v-model="assertion.type"
                           class="h-7 text-xs bg-background border border-border rounded px-2"
+                          @change="debouncedSaveTestConfig(request.id)"
                         >
                           <option v-for="t in assertionTypes" :key="t.value" :value="t.value">
                             {{ t.label }}
@@ -441,20 +728,20 @@ const assertionTypes: { value: AssertionType; label: string }[] = [
                         <!-- Status assertion -->
                         <template v-if="assertion.type === 'status'">
                           <span class="text-xs">=</span>
-                          <UiInput v-model.number="assertion.expectedStatus" type="number" class="w-20 h-7 text-xs" placeholder="200" />
+                          <UiInput v-model.number="assertion.expectedStatus" type="number" class="w-20 h-7 text-xs" placeholder="200" @update:model-value="debouncedSaveTestConfig(request.id)" />
                         </template>
                         
                         <!-- Status Range assertion -->
                         <template v-if="assertion.type === 'status_range'">
-                          <UiInput v-model.number="assertion.minStatus" type="number" class="w-16 h-7 text-xs" placeholder="200" />
+                          <UiInput v-model.number="assertion.minStatus" type="number" class="w-16 h-7 text-xs" placeholder="200" @update:model-value="debouncedSaveTestConfig(request.id)" />
                           <span class="text-xs">-</span>
-                          <UiInput v-model.number="assertion.maxStatus" type="number" class="w-16 h-7 text-xs" placeholder="299" />
+                          <UiInput v-model.number="assertion.maxStatus" type="number" class="w-16 h-7 text-xs" placeholder="299" @update:model-value="debouncedSaveTestConfig(request.id)" />
                         </template>
                         
                         <!-- JSONPath assertion -->
                         <template v-if="assertion.type === 'jsonpath'">
-                          <UiInput v-model="assertion.jsonPath" class="flex-1 h-7 text-xs font-mono" placeholder="$.data.id" />
-                          <select v-model="assertion.operator" class="h-7 text-xs bg-background border border-border rounded px-2">
+                          <UiInput v-model="assertion.jsonPath" class="flex-1 h-7 text-xs font-mono" placeholder="$.data.id" @update:model-value="debouncedSaveTestConfig(request.id)" />
+                          <select v-model="assertion.operator" class="h-7 text-xs bg-background border border-border rounded px-2" @change="debouncedSaveTestConfig(request.id)">
                             <option value="equals">equals</option>
                             <option value="not_equals">not equals</option>
                             <option value="contains">contains</option>
@@ -466,26 +753,27 @@ const assertionTypes: { value: AssertionType; label: string }[] = [
                             v-model="assertion.expectedValue"
                             class="w-24 h-7 text-xs"
                             placeholder="value"
+                            @update:model-value="debouncedSaveTestConfig(request.id)"
                           />
                         </template>
                         
                         <!-- Contains assertion -->
                         <template v-if="assertion.type === 'contains'">
-                          <UiInput v-model="assertion.searchString" class="flex-1 h-7 text-xs" placeholder="search string" />
+                          <UiInput v-model="assertion.searchString" class="flex-1 h-7 text-xs" placeholder="search string" @update:model-value="debouncedSaveTestConfig(request.id)" />
                         </template>
                         
                         <!-- Response Time assertion -->
                         <template v-if="assertion.type === 'response_time'">
                           <span class="text-xs">&lt;</span>
-                          <UiInput v-model.number="assertion.maxTimeMs" type="number" class="w-20 h-7 text-xs" placeholder="5000" />
+                          <UiInput v-model.number="assertion.maxTimeMs" type="number" class="w-20 h-7 text-xs" placeholder="5000" @update:model-value="debouncedSaveTestConfig(request.id)" />
                           <span class="text-xs">ms</span>
                         </template>
                         
                         <!-- Header assertion -->
                         <template v-if="assertion.type === 'header'">
-                          <UiInput v-model="assertion.headerName" class="w-32 h-7 text-xs" placeholder="Header-Name" />
+                          <UiInput v-model="assertion.headerName" class="w-32 h-7 text-xs" placeholder="Header-Name" @update:model-value="debouncedSaveTestConfig(request.id)" />
                           <span class="text-xs">=</span>
-                          <UiInput v-model="assertion.headerValue" class="flex-1 h-7 text-xs" placeholder="value (optional)" />
+                          <UiInput v-model="assertion.headerValue" class="flex-1 h-7 text-xs" placeholder="value (optional)" @update:model-value="debouncedSaveTestConfig(request.id)" />
                         </template>
                         
                         <button class="p-1 text-muted-foreground hover:text-destructive" @click="removeAssertion(request.id, assertion.id)">
@@ -514,29 +802,35 @@ const assertionTypes: { value: AssertionType; label: string }[] = [
                         :key="extraction.id"
                         class="flex items-center gap-2 p-2 bg-background rounded border border-border"
                       >
-                        <input type="checkbox" v-model="extraction.enabled" class="accent-primary" />
-                        <UiInput v-model="extraction.variableName" class="w-32 h-7 text-xs" placeholder="variableName" />
+                        <input type="checkbox" v-model="extraction.enabled" class="accent-primary" @change="debouncedSaveTestConfig(request.id)" />
+                        <UiInput v-model="extraction.variableName" class="w-32 h-7 text-xs" placeholder="variableName" @update:model-value="debouncedSaveTestConfig(request.id)" />
                         <span class="text-xs">=</span>
-                        <UiInput v-model="extraction.jsonPath" class="flex-1 h-7 text-xs font-mono" placeholder="$.data.id" />
+                        <UiInput v-model="extraction.jsonPath" class="flex-1 h-7 text-xs font-mono" placeholder="$.data.id" @update:model-value="debouncedSaveTestConfig(request.id)" />
                         <button class="p-1 text-muted-foreground hover:text-destructive" @click="removeExtraction(request.id, extraction.id)">
                           <Icon name="lucide:x" class="h-3 w-3" />
                         </button>
                       </div>
                       
                       <div v-if="getRequestConfig(request.id).extractVariables.length === 0" class="text-xs text-muted-foreground py-2">
-                        Use {{variableName}} in subsequent requests.
+                        Use {variableName} in subsequent requests.
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
               
+                <!-- Drop indicator line AFTER this item -->
+                <div 
+                  v-if="dropTargetId === request.id && dropPosition === 'after'"
+                  class="h-1 bg-primary rounded-full mx-2 shadow-[0_0_8px_hsl(var(--primary)/0.5)]"
+                />
+              </template>
+              
               <div v-if="testableRequests.length === 0" class="text-center py-8 text-muted-foreground">
                 <Icon name="lucide:inbox" class="h-8 w-8 mx-auto mb-2 opacity-50" />
                 <p class="text-sm">Select a collection</p>
               </div>
-            </div>
-          </UiScrollArea>
+          </div>
         </div>
         
         <!-- Run Button -->

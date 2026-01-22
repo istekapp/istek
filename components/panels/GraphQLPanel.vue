@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core'
+import { buildClientSchema, getIntrospectionQuery, type IntrospectionQuery } from 'graphql'
 import type { GraphQLRequest, GraphQLResponse } from '~/types'
 
 const store = useAppStore()
@@ -9,6 +10,61 @@ const request = computed(() => activeTab.value.request as GraphQLRequest)
 const response = computed(() => activeTab.value.response as GraphQLResponse | null)
 
 const activeQueryTab = ref<'query' | 'variables'>('query')
+const graphqlSchema = ref<any>(null)
+const isLoadingSchema = ref(false)
+const schemaError = ref<string | null>(null)
+const queryEditorRef = ref<any>(null)
+
+// Fetch GraphQL schema for autocomplete
+const fetchSchema = async () => {
+  if (!request.value.url) return
+  
+  isLoadingSchema.value = true
+  schemaError.value = null
+  
+  try {
+    const headers = request.value.headers
+      .filter(h => h.enabled && h.key)
+      .reduce((acc, h) => ({ ...acc, [h.key]: h.value }), {})
+    
+    const result = await invoke<GraphQLResponse>('send_graphql_request', {
+      url: request.value.url,
+      headers,
+      query: getIntrospectionQuery(),
+      variables: null,
+      operationName: null,
+    })
+    
+    if (result.data) {
+      const schema = buildClientSchema(result.data as unknown as IntrospectionQuery)
+      graphqlSchema.value = schema
+      // Update editor schema for autocomplete
+      nextTick(() => {
+        if (queryEditorRef.value) {
+          queryEditorRef.value.updateGraphQLSchema(schema)
+        }
+      })
+    } else if (result.errors) {
+      schemaError.value = result.errors[0]?.message || 'Failed to fetch schema'
+    }
+  } catch (error: any) {
+    schemaError.value = error.toString()
+    console.error('Failed to fetch GraphQL schema:', error)
+  } finally {
+    isLoadingSchema.value = false
+  }
+}
+
+// Auto-fetch schema when URL changes
+watch(() => request.value.url, (newUrl) => {
+  if (newUrl && newUrl.trim()) {
+    // Debounce schema fetch
+    const timeout = setTimeout(() => {
+      fetchSchema()
+    }, 500)
+    return () => clearTimeout(timeout)
+  }
+}, { immediate: true })
 
 const emit = defineEmits<{
   send: []
@@ -69,6 +125,45 @@ const formatResponse = computed(() => {
           @update:model-value="store.updateActiveRequest({ url: $event })"
         />
 
+        <!-- Schema status indicator -->
+        <div class="flex items-center gap-1">
+          <button
+            v-if="isLoadingSchema"
+            class="flex items-center gap-1 rounded-md border border-input bg-muted px-2 py-1 text-xs text-muted-foreground"
+            disabled
+          >
+            <Icon name="lucide:loader-2" class="h-3 w-3 animate-spin" />
+            <span>Loading schema...</span>
+          </button>
+          <button
+            v-else-if="graphqlSchema"
+            class="flex items-center gap-1 rounded-md border border-green-500/30 bg-green-500/10 px-2 py-1 text-xs text-green-500 hover:bg-green-500/20"
+            title="Schema loaded - autocomplete enabled. Click to refresh."
+            @click="fetchSchema"
+          >
+            <Icon name="lucide:check-circle" class="h-3 w-3" />
+            <span>Schema</span>
+          </button>
+          <button
+            v-else-if="schemaError"
+            class="flex items-center gap-1 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1 text-xs text-destructive hover:bg-destructive/20"
+            :title="schemaError + ' - Click to retry'"
+            @click="fetchSchema"
+          >
+            <Icon name="lucide:alert-circle" class="h-3 w-3" />
+            <span>Schema</span>
+          </button>
+          <button
+            v-else-if="request.url"
+            class="flex items-center gap-1 rounded-md border border-input bg-muted px-2 py-1 text-xs text-muted-foreground hover:bg-accent"
+            title="Click to fetch schema for autocomplete"
+            @click="fetchSchema"
+          >
+            <Icon name="lucide:download" class="h-3 w-3" />
+            <span>Fetch Schema</span>
+          </button>
+        </div>
+
         <UiButton
           :disabled="activeTab.isLoading || !request.url"
           @click="sendRequest"
@@ -121,8 +216,10 @@ const formatResponse = computed(() => {
         <ClientOnly>
           <template v-if="activeQueryTab === 'query'">
             <CodeEditor
+              ref="queryEditorRef"
               :model-value="request.query"
-              language="text"
+              language="graphql"
+              :graphql-schema="graphqlSchema"
               min-height="100%"
               @update:model-value="store.updateActiveRequest({ query: $event })"
             />

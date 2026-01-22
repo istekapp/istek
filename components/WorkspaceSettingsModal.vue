@@ -104,10 +104,7 @@ const handleSave = async () => {
       await invoke('sync_save_config', {
         config: {
           enabled: true,
-          syncPath: newSyncPath,
-          syncCollections: true,
-          syncEnvironments: true,
-          syncGlobalVariables: true
+          syncPath: newSyncPath
         }
       })
     } else {
@@ -115,10 +112,7 @@ const handleSave = async () => {
       await invoke('sync_save_config', {
         config: {
           enabled: false,
-          syncPath: '',
-          syncCollections: true,
-          syncEnvironments: true,
-          syncGlobalVariables: true
+          syncPath: ''
         }
       })
     }

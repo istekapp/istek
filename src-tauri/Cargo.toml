@@ -83,8 +83,13 @@ aws-sdk-sts = "1.50"
 aws-sdk-secretsmanager = "1.55"
 aws-credential-types = "1.2"
 
-# System Keychain for encrypt() function
-keyring = "3"
+# AES-GCM encryption for sensitive values
+aes-gcm = "0.10"
+
+# Bitwarden decryption (AES-CBC + HKDF)
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+hkdf = "0.12"
 
 # JSONPath for test assertions
 jsonpath-rust = "0.7"
@@ -115,6 +120,16 @@ notify = { version = "6.1", default-features = false, features = ["macos_kqueue"
 # API Server - OpenAPI documentation
 utoipa = { version = "4", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "7", features = ["axum"] }
+
+# System Keychain for encrypt() function - platform-specific features
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }
 
 # Unix Socket - only on Unix-like systems (not Windows)
 [target.'cfg(unix)'.dependencies]

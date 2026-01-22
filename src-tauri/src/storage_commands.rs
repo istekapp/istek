@@ -3,7 +3,7 @@ use tauri::Manager;
 
 use crate::storage::{
     AppData, Collection, Environment, HistoryItem, McpServer, SecretProvider, 
-    Storage, TestRunHistory, Variable, Workspace
+    SensitiveValue, Storage, TestRunHistory, Variable, Workspace
 };
 
 // ============ Load App Data ============
@@ -53,8 +53,8 @@ pub async fn get_workspace(app: tauri::AppHandle, id: String) -> Result<Option<W
 }
 
 #[tauri::command]
-pub async fn get_default_sync_path(name: String) -> Result<String, String> {
-    let home_dir = dirs::home_dir().ok_or("Could not determine home directory")?;
+pub async fn get_default_sync_path(app: tauri::AppHandle, name: String) -> Result<String, String> {
+    let storage = app.state::<Arc<Storage>>();
     
     let safe_name: String = name
         .chars()
@@ -62,9 +62,10 @@ pub async fn get_default_sync_path(name: String) -> Result<String, String> {
         .collect::<String>()
         .to_lowercase();
     
-    let path = home_dir
-        .join("Desktop")
-        .join(safe_name);
+    // Use the istek config directory as the base path
+    let path = storage.config_dir()
+        .join("workspaces")
+        .join(&safe_name);
     
     Ok(path.to_string_lossy().to_string())
 }
@@ -295,6 +296,48 @@ pub async fn delete_test_run(app: tauri::AppHandle, id: String) -> Result<(), St
 pub async fn clear_test_runs(app: tauri::AppHandle) -> Result<(), String> {
     let storage = app.state::<Arc<Storage>>();
     storage.clear_test_runs()
+}
+
+// ============ Sensitive Values Commands ============
+
+#[tauri::command]
+pub async fn get_sensitive_values(app: tauri::AppHandle, workspace_id: Option<String>) -> Result<Vec<SensitiveValue>, String> {
+    let storage = app.state::<Arc<Storage>>();
+    
+    let ws_id = workspace_id.or_else(|| storage.get_active_workspace_id().ok().flatten());
+    let ws_id = ws_id.ok_or("No active workspace")?;
+    
+    storage.get_sensitive_values(&ws_id)
+}
+
+#[tauri::command]
+pub async fn get_sensitive_value(app: tauri::AppHandle, key: String, workspace_id: Option<String>) -> Result<Option<SensitiveValue>, String> {
+    let storage = app.state::<Arc<Storage>>();
+    
+    let ws_id = workspace_id.or_else(|| storage.get_active_workspace_id().ok().flatten());
+    let ws_id = ws_id.ok_or("No active workspace")?;
+    
+    storage.get_sensitive_value(&ws_id, &key)
+}
+
+#[tauri::command]
+pub async fn save_sensitive_value(app: tauri::AppHandle, value: SensitiveValue, workspace_id: Option<String>) -> Result<(), String> {
+    let storage = app.state::<Arc<Storage>>();
+    
+    let ws_id = workspace_id.or_else(|| storage.get_active_workspace_id().ok().flatten());
+    let ws_id = ws_id.ok_or("No active workspace")?;
+    
+    storage.save_sensitive_value(&ws_id, &value)
+}
+
+#[tauri::command]
+pub async fn delete_sensitive_value(app: tauri::AppHandle, key: String, workspace_id: Option<String>) -> Result<(), String> {
+    let storage = app.state::<Arc<Storage>>();
+    
+    let ws_id = workspace_id.or_else(|| storage.get_active_workspace_id().ok().flatten());
+    let ws_id = ws_id.ok_or("No active workspace")?;
+    
+    storage.delete_sensitive_value(&ws_id, &key)
 }
 
 // ============ Utility Commands ============

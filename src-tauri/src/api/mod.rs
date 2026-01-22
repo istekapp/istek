@@ -37,6 +37,25 @@ pub struct PaginatedResponse<T> {
     pub offset: i64,
 }
 
+// Non-generic version for OpenAPI documentation
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(example = json!({
+    "items": [],
+    "total": 0,
+    "limit": 50,
+    "offset": 0
+}))]
+pub struct PaginatedResponseSchema {
+    /// List of items
+    pub items: Vec<serde_json::Value>,
+    /// Total number of items
+    pub total: i64,
+    /// Number of items per page
+    pub limit: i64,
+    /// Number of items to skip
+    pub offset: i64,
+}
+
 // Error response
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ApiError {

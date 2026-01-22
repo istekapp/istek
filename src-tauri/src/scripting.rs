@@ -224,7 +224,7 @@ async fn run_script_internal(
                 response_obj.set("headers", resp_headers_obj).unwrap();
                 
                 // istek.response.json() - parse body as JSON
-                let body_for_json = response.body.clone();
+                let _body_for_json = response.body.clone();
                 let json_fn = Function::new(ctx.clone(), move || -> rquickjs::Result<Value> {
                     // Return the raw body, let JS parse it
                     Err(rquickjs::Error::Exception)

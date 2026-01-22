@@ -113,7 +113,7 @@ pub struct UpdateEnvironmentRequest {
         ("offset" = Option<i64>, Query, description = "Number of items to skip (default: 0)")
     ),
     responses(
-        (status = 200, description = "List of environments", body = PaginatedResponse<EnvironmentResponse>)
+        (status = 200, description = "List of environments", body = PaginatedResponseSchema)
     ),
     tag = "Environments"
 )]

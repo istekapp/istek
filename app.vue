@@ -6,6 +6,7 @@ import { resolveAuth, resolveHeaders, resolveBaseUrl, applyAuthToHeaders, getAut
 
 // Zoom level management - synced with variableStore
 const variableStore = useVariableStore()
+const workspaceStore = useWorkspaceStore()
 const { appZoom } = variableStore
 
 const showZoomIndicator = ref(false)
@@ -417,6 +418,9 @@ onMounted(async () => {
     variableStore.loadVariableDataFromDatabase(),
   ])
   
+  // Load git status after workspace data is loaded
+  await workspaceStore.refreshGitStatus()
+  
   // Keyboard shortcuts for zoom
   const handleZoomKeydown = (e: KeyboardEvent) => {
     // CMD/Ctrl + Plus (zoom in)
@@ -568,6 +572,9 @@ onMounted(async () => {
     <!-- Variable Manager Modal -->
     <VariableManager />
     
+    <!-- Master Key Setup Dialog -->
+    <MasterKeySetupDialog />
+    
     <!-- Workspace Modals -->
     <CreateWorkspaceModal />
     <CommitModal />
@@ -575,6 +582,9 @@ onMounted(async () => {
     
     <!-- Search Modal -->
     <SearchModal ref="searchModalRef" />
+    
+    <!-- Update Notification -->
+    <UpdateNotification />
     
     <!-- Zoom Indicator -->
     <Transition name="fade">

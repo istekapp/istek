@@ -92,7 +92,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 </p>
 
 <p align="center">
-  <a href="https://twitter.com/istekapp">Twitter</a> •
+  <a href="https://twitter.com/istek_app">Twitter</a> •
   <a href="https://github.com/istekapp/istek/discussions">Discussions</a> •
   <a href="https://istek.app">Website</a>
 </p>

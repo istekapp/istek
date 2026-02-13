@@ -21,6 +21,7 @@ mod sync;
 mod api;
 mod api_server;
 mod update_checker;
+mod license;
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
@@ -248,6 +249,12 @@ pub fn run() {
             update_checker::check_for_update,
             update_checker::get_app_version,
             update_checker::dismiss_update,
+            // License
+            license::get_device_fingerprint,
+            license::get_device_name,
+            // Evaluation
+            license::get_evaluation_info,
+            license::dismiss_evaluation_expired,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

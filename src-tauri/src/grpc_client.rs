@@ -13,6 +13,10 @@ use tonic_reflection::pb::v1::{
 use prost::Message;
 use prost_types::{DescriptorProto, FileDescriptorProto, ServiceDescriptorProto};
 
+// For compiling .proto text into FileDescriptorProto objects
+use protox::Compiler;
+use protox::file::{File as ProtoFile, FileResolver, ChainFileResolver, GoogleFileResolver};
+
 /// gRPC service info discovered via reflection or proto file
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -182,23 +186,81 @@ pub async fn grpc_discover_services(url: String) -> Result<GrpcDiscoveryResult, 
     })
 }
 
-/// Parse proto file content and extract services
+/// Parse proto file content and extract services using protox compiler.
+/// Falls back to the simple text parser if protox compilation fails.
 #[tauri::command]
 pub async fn grpc_parse_proto(proto_content: String) -> Result<GrpcDiscoveryResult, String> {
-    // For now, we'll do basic parsing. In production, you'd use protoc or prost-build
-    // This is a simplified parser that handles common proto3 syntax
-    
-    let services = parse_proto_content(&proto_content)?;
-    
-    Ok(GrpcDiscoveryResult {
-        success: true,
-        services,
-        error: None,
-        source: "proto".to_string(),
-    })
+    // Try compiling with protox first for full type information (input schemas, etc.)
+    match compile_proto_to_descriptors(&proto_content) {
+        Ok(file_descriptors) => {
+            let services = extract_services_from_descriptors(&file_descriptors);
+            Ok(GrpcDiscoveryResult {
+                success: true,
+                services,
+                error: None,
+                source: "proto".to_string(),
+            })
+        }
+        Err(compile_err) => {
+            // Fall back to the simple text parser
+            log::warn!("protox compilation failed, falling back to text parser: {}", compile_err);
+            let services = parse_proto_content(&proto_content)?;
+            Ok(GrpcDiscoveryResult {
+                success: true,
+                services,
+                error: None,
+                source: "proto".to_string(),
+            })
+        }
+    }
 }
 
-/// Make a unary gRPC call
+/// Get file descriptors from server reflection
+async fn get_file_descriptors_via_reflection(channel: Channel, service: &str) -> Result<Vec<FileDescriptorProto>, String> {
+    use tokio_stream::StreamExt;
+    
+    let mut reflection_client = ServerReflectionClient::new(channel);
+    
+    let request = ServerReflectionRequest {
+        host: String::new(),
+        message_request: Some(MessageRequest::FileContainingSymbol(service.to_string())),
+    };
+    
+    let outbound = tokio_stream::once(request);
+    let response: tonic::Response<tonic::Streaming<ServerReflectionResponse>> = reflection_client
+        .server_reflection_info(outbound)
+        .await
+        .map_err(|e| format!("Reflection error: {}", e))?;
+    
+    let mut stream = response.into_inner();
+    
+    let first_response = stream
+        .next()
+        .await
+        .ok_or_else(|| "No response from reflection".to_string())?
+        .map_err(|e| format!("Failed to get method info: {}", e))?;
+    
+    let fd_bytes_list = match &first_response.message_response {
+        Some(MessageResponse::FileDescriptorResponse(fd_response)) => {
+            fd_response.file_descriptor_proto.clone()
+        }
+        _ => return Err("Failed to get file descriptors".to_string()),
+    };
+    
+    let mut file_descriptors = Vec::new();
+    for fd_bytes in &fd_bytes_list {
+        if let Ok(fd) = FileDescriptorProto::decode(&fd_bytes[..]) {
+            file_descriptors.push(fd);
+        }
+    }
+    
+    Ok(file_descriptors)
+}
+
+/// Make a unary gRPC call.
+/// When `proto_content` is provided, uses protox to compile the proto and get type
+/// descriptors locally instead of relying on server reflection. This allows calling
+/// gRPC servers that don't have reflection enabled.
 #[tauri::command]
 pub async fn grpc_call(
     url: String,
@@ -206,6 +268,7 @@ pub async fn grpc_call(
     method: String,
     message: String,
     metadata: HashMap<String, String>,
+    proto_content: Option<String>,
 ) -> Result<GrpcCallResponse, String> {
     let start = std::time::Instant::now();
     
@@ -232,45 +295,14 @@ pub async fn grpc_call(
         .await
         .map_err(|e| format!("Failed to connect: {}", e))?;
     
-    // We need to use reflection to make dynamic calls
-    // First, get the file descriptor for this method
-    let mut reflection_client = ServerReflectionClient::new(channel.clone());
-    
-    let request = ServerReflectionRequest {
-        host: String::new(),
-        message_request: Some(MessageRequest::FileContainingSymbol(service.clone())),
+    // Get file descriptors either from proto_content (protox) or server reflection
+    let file_descriptors = if let Some(proto) = &proto_content {
+        // Compile the .proto file locally using protox — no reflection needed
+        compile_proto_to_descriptors(proto)?
+    } else {
+        // Fall back to server reflection
+        get_file_descriptors_via_reflection(channel.clone(), &service).await?
     };
-    
-    use tokio_stream::StreamExt;
-    let outbound = tokio_stream::once(request);
-    let response: tonic::Response<tonic::Streaming<ServerReflectionResponse>> = reflection_client
-        .server_reflection_info(outbound)
-        .await
-        .map_err(|e| format!("Reflection error: {}", e))?;
-    
-    let mut stream = response.into_inner();
-    
-    let first_response = stream
-        .next()
-        .await
-        .ok_or_else(|| "No response from reflection".to_string())?
-        .map_err(|e| format!("Failed to get method info: {}", e))?;
-    
-    // Get file descriptors as raw bytes for later use
-    let fd_bytes_list = match &first_response.message_response {
-        Some(MessageResponse::FileDescriptorResponse(fd_response)) => {
-            fd_response.file_descriptor_proto.clone()
-        }
-        _ => return Err("Failed to get file descriptors".to_string()),
-    };
-    
-    // Parse file descriptors
-    let mut file_descriptors = Vec::new();
-    for fd_bytes in &fd_bytes_list {
-        if let Ok(fd) = FileDescriptorProto::decode(&fd_bytes[..]) {
-            file_descriptors.push(fd);
-        }
-    }
     
     // Find the method and its input/output types
     let mut input_type_name = None;
@@ -439,6 +471,75 @@ fn proto_type_to_json_type(t: prost_types::field_descriptor_proto::Type) -> &'st
         Type::Message | Type::Group => "object",
         Type::Enum => "string",
     }
+}
+
+/// In-memory file resolver for protox — serves a single proto file from a string.
+struct InMemoryResolver {
+    name: String,
+    content: String,
+}
+
+impl FileResolver for InMemoryResolver {
+    fn open_file(&self, name: &str) -> Result<ProtoFile, protox::Error> {
+        if name == self.name {
+            ProtoFile::from_source(&self.name, &self.content)
+        } else {
+            Err(protox::Error::file_not_found(name))
+        }
+    }
+}
+
+/// Compile proto content using protox and return FileDescriptorProto objects.
+/// This produces real descriptors with full type information, unlike the text parser.
+fn compile_proto_to_descriptors(content: &str) -> Result<Vec<FileDescriptorProto>, String> {
+    // Chain our in-memory resolver with Google's well-known types resolver
+    // so imports like google/protobuf/timestamp.proto work out of the box.
+    let mut resolver = ChainFileResolver::new();
+    resolver.add(InMemoryResolver {
+        name: "input.proto".to_string(),
+        content: content.to_string(),
+    });
+    resolver.add(GoogleFileResolver::new());
+    
+    let mut compiler = Compiler::with_file_resolver(resolver);
+    
+    compiler
+        .include_imports(true)
+        .open_file("input.proto")
+        .map_err(|e| format!("Failed to compile proto: {}", e))?;
+    
+    let file_descriptor_set = compiler.file_descriptor_set();
+    
+    Ok(file_descriptor_set.file)
+}
+
+/// Extract GrpcServiceInfo from compiled FileDescriptorProto objects
+fn extract_services_from_descriptors(file_descriptors: &[FileDescriptorProto]) -> Vec<GrpcServiceInfo> {
+    let mut services = Vec::new();
+    
+    for fd in file_descriptors {
+        for service in &fd.service {
+            let svc_name = service.name.clone().unwrap_or_default();
+            let full_name = if let Some(pkg) = &fd.package {
+                if pkg.is_empty() {
+                    svc_name.clone()
+                } else {
+                    format!("{}.{}", pkg, svc_name)
+                }
+            } else {
+                svc_name.clone()
+            };
+            
+            let methods = extract_methods(service, fd);
+            services.push(GrpcServiceInfo {
+                name: svc_name,
+                full_name,
+                methods,
+            });
+        }
+    }
+    
+    services
 }
 
 /// Simple proto file parser (for basic cases)

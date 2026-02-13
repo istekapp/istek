@@ -76,6 +76,7 @@ interface ScriptResult {
 }
 
 const store = useAppStore()
+const licenseStore = useLicenseStore()
 const { activeTab, collections } = store
 
 // Search modal ref
@@ -416,6 +417,7 @@ onMounted(async () => {
   await Promise.all([
     store.loadDataFromDatabase(),
     variableStore.loadVariableDataFromDatabase(),
+    licenseStore.init(),
   ])
   
   // Load git status after workspace data is loaded
@@ -477,14 +479,17 @@ onMounted(async () => {
           </button>
         </div>
         
-        <!-- Settings Button - Right aligned -->
-        <button
-          class="w-10 h-10 flex items-center justify-center rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-          title="Settings"
-          @click="variableStore.openVariableManager('general')"
-        >
-          <Icon name="lucide:settings" class="h-5 w-5" />
-        </button>
+        <!-- Notification Bell + Settings - Right aligned -->
+        <div class="flex items-center gap-1">
+          <NotificationBell />
+          <button
+            class="w-10 h-10 flex items-center justify-center rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+            title="Settings"
+            @click="variableStore.openVariableManager('general')"
+          >
+            <Icon name="lucide:settings" class="h-5 w-5" />
+          </button>
+        </div>
       </div>
 
       <!-- Header with Protocol Selector, Tabs, and Environment -->
@@ -583,8 +588,9 @@ onMounted(async () => {
     <!-- Search Modal -->
     <SearchModal ref="searchModalRef" />
     
-    <!-- Update Notification -->
-    <UpdateNotification />
+    <!-- Evaluation Expired Dialog -->
+    <EvaluationDialog />
+    
     
     <!-- Zoom Indicator -->
     <Transition name="fade">

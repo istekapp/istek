@@ -183,14 +183,12 @@ const title = computed(() => {
           <div v-if="activeSettingsTab === 'auth'" class="space-y-4">
             <div class="space-y-2">
               <label class="text-sm font-medium">Authentication Type</label>
-              <select
-                v-model="authType"
-                class="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
-              >
-                <option v-for="t in authTypes" :key="t.value" :value="t.value">
-                  {{ t.label }}
-                </option>
-              </select>
+              <UiSelect
+                :model-value="authType"
+                :options="authTypes"
+                class="w-full h-10 text-sm"
+                @update:model-value="authType = $event as any"
+              />
             </div>
 
             <div v-if="authType !== 'none' && authType !== 'inherit'" class="space-y-4">
@@ -283,13 +281,12 @@ const title = computed(() => {
                 </div>
                 <div class="space-y-2">
                   <label class="text-sm font-medium">Add To</label>
-                  <select
-                    v-model="apiKeyIn"
-                    class="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
-                  >
-                    <option value="header">Header</option>
-                    <option value="query">Query Parameter</option>
-                  </select>
+                  <UiSelect
+                    :model-value="apiKeyIn"
+                    :options="[{ value: 'header', label: 'Header' }, { value: 'query', label: 'Query Parameter' }]"
+                    class="w-full h-10 text-sm"
+                    @update:model-value="apiKeyIn = $event as any"
+                  />
                 </div>
               </template>
             </div>

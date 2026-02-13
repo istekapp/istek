@@ -273,6 +273,19 @@ const sendRequest = async () => {
     
     const startTime = Date.now()
     
+    // When discovery was done via proto file, pass the proto content
+    // so the backend uses protox instead of server reflection
+    const invokeArgs: Record<string, any> = {
+      url,
+      service: request.value.service,
+      method: request.value.method,
+      message,
+      metadata,
+    }
+    if (discoverySource.value === 'proto' && protoContent.value) {
+      invokeArgs.protoContent = protoContent.value
+    }
+    
     const result = await invoke<{
       success: boolean
       data?: any
@@ -281,13 +294,7 @@ const sendRequest = async () => {
       statusMessage: string
       metadata: Record<string, string>
       timeMs: number
-    }>('grpc_call', {
-      url,
-      service: request.value.service,
-      method: request.value.method,
-      message,
-      metadata,
-    })
+    }>('grpc_call', invokeArgs)
     
     const response: GrpcResponse = {
       data: result.data,
@@ -428,30 +435,22 @@ const copyResponse = async () => {
       <div v-if="discoveredServices.length > 0" class="flex gap-4">
         <div class="flex-1">
           <label class="text-xs text-muted-foreground mb-1 block">Service</label>
-          <select
-            v-model="selectedService"
-            class="w-full h-10 px-3 rounded-md border border-input bg-background text-sm"
-          >
-            <option v-for="service in discoveredServices" :key="service.fullName" :value="service.fullName">
-              {{ service.fullName }}
-            </option>
-          </select>
+          <UiSelect
+            :model-value="selectedService"
+            :options="discoveredServices.map(s => ({ value: s.fullName, label: s.fullName }))"
+            class="w-full h-10 text-sm"
+            @update:model-value="selectedService = $event"
+          />
         </div>
         
         <div class="flex-1">
           <label class="text-xs text-muted-foreground mb-1 block">Method</label>
-          <select
-            v-model="selectedMethod"
-            class="w-full h-10 px-3 rounded-md border border-input bg-background text-sm"
-          >
-            <option 
-              v-for="method in selectedServiceInfo?.methods" 
-              :key="method.name" 
-              :value="method.name"
-            >
-              {{ method.name }} ({{ getStreamingBadge(method) }})
-            </option>
-          </select>
+          <UiSelect
+            :model-value="selectedMethod"
+            :options="(selectedServiceInfo?.methods || []).map(m => ({ value: m.name, label: `${m.name} (${getStreamingBadge(m)})` }))"
+            class="w-full h-10 text-sm"
+            @update:model-value="selectedMethod = $event"
+          />
         </div>
         
         <div class="self-end">

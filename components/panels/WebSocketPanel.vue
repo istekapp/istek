@@ -179,14 +179,12 @@ const formatTime = (timestamp: number) => {
     <!-- Message Input -->
     <div class="border-t border-border p-3">
       <div class="flex items-center gap-2">
-        <select
-          :value="request.messageType"
-          class="h-10 rounded-md border border-input bg-background px-2 text-sm"
-          @change="store.updateActiveRequest({ messageType: ($event.target as HTMLSelectElement).value as any })"
-        >
-          <option value="text">Text</option>
-          <option value="binary">Binary</option>
-        </select>
+        <UiSelect
+          :model-value="request.messageType"
+          :options="[{ value: 'text', label: 'Text' }, { value: 'binary', label: 'Binary' }]"
+          class="h-10 w-28 text-sm"
+          @update:model-value="store.updateActiveRequest({ messageType: $event as any })"
+        />
         <UiInput
           v-model="messageInput"
           placeholder="Type a message..."

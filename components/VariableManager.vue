@@ -677,6 +677,7 @@ watch(variableTestResults, (results) => {
               { id: 'integrations', label: 'Integrations', icon: 'lucide:plug-zap' },
               { id: 'playground', label: 'Playground', icon: 'lucide:play-circle' },
               { id: 'api', label: 'API', icon: 'lucide:server' },
+              { id: 'license', label: 'License', icon: 'lucide:key' },
             ]"
             :key="tab.id"
             :class="[
@@ -896,21 +897,12 @@ watch(variableTestResults, (results) => {
                     />
                     
                     <!-- Source selector -->
-                    <select
-                      :value="variable.secretProvider ? variable.secretProvider.providerId : 'manual'"
-                      class="h-10 px-3 rounded-md border border-input bg-background text-sm w-40"
-                      @change="handleSourceChange(variable.id, ($event.target as HTMLSelectElement).value)"
-                    >
-                      <option value="manual">Manual</option>
-                      <option 
-                        v-for="provider in secretProviders" 
-                        :key="provider.id" 
-                        :value="provider.id"
-                        :disabled="!provider.enabled"
-                      >
-                        {{ provider.name }}
-                      </option>
-                    </select>
+                    <UiSelect
+                      :model-value="variable.secretProvider ? variable.secretProvider.providerId : 'manual'"
+                      :options="[{ value: 'manual', label: 'Manual' }, ...secretProviders.filter(p => p.enabled).map(p => ({ value: p.id, label: p.name }))]"
+                      class="h-10 w-40 text-sm"
+                      @update:model-value="handleSourceChange(variable.id, $event)"
+                    />
                     
                     <!-- Manual value input -->
                     <template v-if="!variable.secretProvider">
@@ -1785,87 +1777,77 @@ watch(variableTestResults, (results) => {
 
             <!-- API Endpoints -->
             <div class="space-y-4">
-              <h4 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Endpoints</h4>
+              <h3 class="text-lg font-semibold">API Server</h3>
               
-              <div class="space-y-3">
-                <div
-                  v-for="endpoint in apiEndpoints"
+              <div v-if="apiLoading" class="flex items-center gap-2 text-muted-foreground">
+                <Icon name="lucide:loader-2" class="h-4 w-4 animate-spin" />
+                Loading status...
+              </div>
+              
+              <div v-else-if="apiStatus" class="p-4 rounded-lg bg-green-500/10 border border-green-500/20 text-green-600 dark:text-green-400">
+                <div class="flex items-center gap-2 mb-1">
+                  <Icon name="lucide:check-circle" class="h-5 w-5" />
+                  <span class="font-medium">API Server Running</span>
+                </div>
+                <div class="text-sm opacity-80 pl-7">
+                  Version: {{ apiStatus.version }}
+                </div>
+              </div>
+              
+              <div v-else class="p-4 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive">
+                <div class="flex items-center gap-2 mb-1">
+                  <Icon name="lucide:alert-circle" class="h-5 w-5" />
+                  <span class="font-medium">API Server Unavailable</span>
+                </div>
+                <div class="text-sm opacity-80 pl-7">
+                  Could not connect to {{ API_BASE_URL }}
+                </div>
+              </div>
+
+              <!-- Endpoints -->
+              <div class="grid gap-4 mt-6">
+                <div 
+                  v-for="endpoint in apiEndpoints" 
                   :key="endpoint.key"
-                  class="group flex items-center gap-3 p-4 rounded-lg border border-border bg-background hover:bg-accent/50 transition-colors"
+                  class="flex items-start justify-between p-4 rounded-lg border border-border bg-background"
                 >
-                  <div class="h-10 w-10 rounded-lg flex items-center justify-center" :class="endpoint.bgColor">
-                    <Icon :name="endpoint.icon" :class="['h-5 w-5', endpoint.color]" />
-                  </div>
-                  <div class="flex-1 min-w-0">
-                    <div class="font-medium">{{ endpoint.name }}</div>
-                    <div class="text-xs text-muted-foreground mb-1">{{ endpoint.description }}</div>
-                    <div class="text-sm text-muted-foreground truncate font-mono">
-                      {{ endpoint.url }}
+                  <div class="flex gap-3">
+                    <div :class="['h-10 w-10 rounded-lg flex items-center justify-center shrink-0', endpoint.bgColor, endpoint.color]">
+                      <Icon :name="endpoint.icon" class="h-5 w-5" />
+                    </div>
+                    <div>
+                      <div class="font-medium">{{ endpoint.name }}</div>
+                      <div class="text-sm text-muted-foreground">{{ endpoint.description }}</div>
+                      <div class="mt-2 flex items-center gap-2">
+                        <code class="text-xs px-2 py-1 rounded bg-muted font-mono select-all">{{ endpoint.url }}</code>
+                        <button 
+                          class="p-1 hover:bg-accent rounded text-muted-foreground"
+                          @click="copyApiUrl(endpoint.url, endpoint.key)"
+                        >
+                          <Icon :name="apiCopied === endpoint.key ? 'lucide:check' : 'lucide:copy'" class="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </div>
                   </div>
-                  <button
-                    class="p-2 rounded-md hover:bg-accent transition-all flex items-center gap-2"
-                    :class="apiCopied === endpoint.key ? 'bg-green-500/10 text-green-500' : 'text-muted-foreground'"
-                    :title="apiCopied === endpoint.key ? 'Copied!' : 'Copy URL'"
-                    @click="copyApiUrl(endpoint.url, endpoint.key)"
+                  <a 
+                    :href="endpoint.url" 
+                    target="_blank"
+                    class="px-3 py-1.5 text-xs font-medium border border-border rounded hover:bg-accent transition-colors"
                   >
-                    <Icon 
-                      :name="apiCopied === endpoint.key ? 'lucide:check' : 'lucide:copy'" 
-                      class="h-4 w-4" 
-                    />
-                  </button>
+                    Open
+                  </a>
                 </div>
               </div>
             </div>
-
-            <!-- MCP Integration Info -->
-            <div class="bg-muted/30 rounded-lg p-6 space-y-4">
-              <div class="flex items-center gap-3">
-                <div class="h-10 w-10 rounded-lg bg-purple-500/10 flex items-center justify-center">
-                  <Icon name="lucide:bot" class="h-5 w-5 text-purple-500" />
-                </div>
-                <div>
-                  <h4 class="font-medium">MCP Integration</h4>
-                  <p class="text-sm text-muted-foreground">Use with AI assistants like Claude</p>
-                </div>
-              </div>
-              
-              <p class="text-sm text-muted-foreground">
-                The Istek MCP server connects AI assistants to this API, enabling them to manage your workspaces, 
-                collections, environments, and more through natural language.
-              </p>
-
-              <div class="flex items-center gap-2">
-                <a 
-                  href="https://github.com/istekapp/mcp" 
-                  target="_blank"
-                  class="text-sm text-primary hover:underline flex items-center gap-1"
-                >
-                  <Icon name="lucide:github" class="h-4 w-4" />
-                  View MCP Server on GitHub
-                  <Icon name="lucide:external-link" class="h-3 w-3" />
-                </a>
-              </div>
-            </div>
-
           </div>
-        </div>
 
-        <!-- Footer -->
-        <div class="flex items-center justify-between border-t border-border px-6 py-4">
-          <p v-if="variableManagerTab === 'variables'" class="text-sm text-muted-foreground">
-            Use <code class="px-1.5 py-0.5 rounded bg-muted font-mono">&#123;&#123;VARIABLE_NAME&#125;&#125;</code> in URLs, headers, and body
-          </p>
-          <p v-else-if="variableManagerTab === 'general'" class="text-sm text-muted-foreground">
-            Settings are saved automatically
-          </p>
-          <p v-else class="text-sm text-muted-foreground"></p>
-          <UiButton variant="outline" @click="closeModal">Close</UiButton>
+          <!-- License Tab -->
+          <div v-else-if="variableManagerTab === 'license'" class="space-y-6">
+            <LicenseSettings />
+          </div>
         </div>
       </div>
     </div>
   </Teleport>
-  
-  <!-- Master Key Setup Dialog -->
-  <MasterKeySetupDialog />
 </template>
+

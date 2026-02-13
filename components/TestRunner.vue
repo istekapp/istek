@@ -650,15 +650,12 @@ const assertionTypes: { value: AssertionType; label: string }[] = [
                             class="accent-primary"
                           />
                           
-                          <select
-                            v-model="assertion.type"
-                            class="h-7 text-xs bg-background border border-border rounded px-2"
-                            @change="updateAssertion(request.id, assertion.id, { type: assertion.type })"
-                          >
-                            <option v-for="t in assertionTypes" :key="t.value" :value="t.value">
-                              {{ t.label }}
-                            </option>
-                          </select>
+                          <UiSelect
+                            :model-value="assertion.type"
+                            :options="assertionTypes"
+                            class="h-7 text-xs"
+                            @update:model-value="assertion.type = $event as any; updateAssertion(request.id, assertion.id, { type: assertion.type })"
+                          />
                           
                           <!-- Status assertion -->
                           <template v-if="assertion.type === 'status'">
@@ -695,16 +692,12 @@ const assertionTypes: { value: AssertionType; label: string }[] = [
                               class="flex-1 h-7 text-xs font-mono"
                               placeholder="$.data.id"
                             />
-                            <select
-                              v-model="assertion.operator"
-                              class="h-7 text-xs bg-background border border-border rounded px-2"
-                            >
-                              <option value="equals">equals</option>
-                              <option value="not_equals">not equals</option>
-                              <option value="contains">contains</option>
-                              <option value="exists">exists</option>
-                              <option value="not_exists">not exists</option>
-                            </select>
+                            <UiSelect
+                              :model-value="assertion.operator"
+                              :options="[{ value: 'equals', label: 'equals' }, { value: 'not_equals', label: 'not equals' }, { value: 'contains', label: 'contains' }, { value: 'exists', label: 'exists' }, { value: 'not_exists', label: 'not exists' }]"
+                              class="h-7 text-xs"
+                              @update:model-value="assertion.operator = $event as any"
+                            />
                             <UiInput
                               v-if="assertion.operator !== 'exists' && assertion.operator !== 'not_exists'"
                               v-model="assertion.expectedValue"

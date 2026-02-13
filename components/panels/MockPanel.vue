@@ -342,30 +342,23 @@ const serverLogs = computed(() => {
         <div v-if="sourceType === 'collection'" class="p-4 border-b border-border space-y-3">
           <div class="flex items-center gap-2">
             <label class="text-sm font-medium">Collection:</label>
-            <select
-              v-model="selectedCollectionId"
-              class="flex-1 h-9 rounded-md border border-border bg-background px-3 text-sm"
-              @change="selectedFolderId = null"
-            >
-              <option :value="null">Select a collection...</option>
-              <option v-for="c in collections" :key="c.id" :value="c.id">
-                {{ c.name }}
-              </option>
-            </select>
+            <UiSelect
+              :model-value="selectedCollectionId || ''"
+              :options="[{ value: '', label: 'Select a collection...' }, ...collections.map((c: any) => ({ value: c.id, label: c.name }))]"
+              class="flex-1 h-9 text-sm"
+              placeholder="Select a collection..."
+              @update:model-value="selectedCollectionId = $event || null; selectedFolderId = null"
+            />
           </div>
           
           <div v-if="selectedCollection?.folders?.length" class="flex items-center gap-2">
             <label class="text-sm font-medium">Folder:</label>
-            <select
-              v-model="selectedFolderId"
-              class="flex-1 h-9 rounded-md border border-border bg-background px-3 text-sm"
-              @change="sourceType = 'folder'"
-            >
-              <option :value="null">All requests</option>
-              <option v-for="f in selectedCollection.folders" :key="f.id" :value="f.id">
-                {{ f.name }} ({{ f.requests.filter(r => r.protocol === 'http').length }})
-              </option>
-            </select>
+            <UiSelect
+              :model-value="selectedFolderId || ''"
+              :options="[{ value: '', label: 'All requests' }, ...selectedCollection.folders.map((f: any) => ({ value: f.id, label: `${f.name} (${f.requests.filter((r: any) => r.protocol === 'http').length})` }))]"
+              class="flex-1 h-9 text-sm"
+              @update:model-value="selectedFolderId = $event || null; sourceType = 'folder'"
+            />
           </div>
         </div>
         

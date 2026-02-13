@@ -592,29 +592,23 @@ const assertionTypes: { value: AssertionType; label: string }[] = [
         <div class="p-4 border-b border-border space-y-3">
           <div class="flex items-center gap-2">
             <label class="text-sm font-medium">Collection:</label>
-            <select
-              v-model="selectedCollectionId"
-              class="flex-1 h-9 rounded-md border border-border bg-background px-3 text-sm"
-              @change="selectedFolderId = null"
-            >
-              <option :value="null">Select a collection...</option>
-              <option v-for="c in collections" :key="c.id" :value="c.id">
-                {{ c.name }}
-              </option>
-            </select>
+            <UiSelect
+              :model-value="selectedCollectionId || ''"
+              :options="[{ value: '', label: 'Select a collection...' }, ...collections.map((c: any) => ({ value: c.id, label: c.name }))]"
+              class="flex-1 h-9 text-sm"
+              placeholder="Select a collection..."
+              @update:model-value="selectedCollectionId = $event || null; selectedFolderId = null"
+            />
           </div>
           
           <div v-if="selectedCollection?.folders?.length" class="flex items-center gap-2">
             <label class="text-sm font-medium">Folder:</label>
-            <select
-              v-model="selectedFolderId"
-              class="flex-1 h-9 rounded-md border border-border bg-background px-3 text-sm"
-            >
-              <option :value="null">All requests</option>
-              <option v-for="f in selectedCollection.folders" :key="f.id" :value="f.id">
-                {{ f.name }} ({{ f.requests.filter(r => r.protocol === 'http').length }})
-              </option>
-            </select>
+            <UiSelect
+              :model-value="selectedFolderId || ''"
+              :options="[{ value: '', label: 'All requests' }, ...selectedCollection.folders.map((f: any) => ({ value: f.id, label: `${f.name} (${f.requests.filter((r: any) => r.protocol === 'http').length})` }))]"
+              class="flex-1 h-9 text-sm"
+              @update:model-value="selectedFolderId = $event || null"
+            />
           </div>
         </div>
         
@@ -715,15 +709,12 @@ const assertionTypes: { value: AssertionType; label: string }[] = [
                       >
                         <input type="checkbox" v-model="assertion.enabled" class="accent-primary" @change="debouncedSaveTestConfig(request.id)" />
                         
-                        <select
-                          v-model="assertion.type"
-                          class="h-7 text-xs bg-background border border-border rounded px-2"
-                          @change="debouncedSaveTestConfig(request.id)"
-                        >
-                          <option v-for="t in assertionTypes" :key="t.value" :value="t.value">
-                            {{ t.label }}
-                          </option>
-                        </select>
+                        <UiSelect
+                          :model-value="assertion.type"
+                          :options="assertionTypes"
+                          class="h-7 text-xs"
+                          @update:model-value="assertion.type = $event as any; debouncedSaveTestConfig(request.id)"
+                        />
                         
                         <!-- Status assertion -->
                         <template v-if="assertion.type === 'status'">
@@ -741,13 +732,12 @@ const assertionTypes: { value: AssertionType; label: string }[] = [
                         <!-- JSONPath assertion -->
                         <template v-if="assertion.type === 'jsonpath'">
                           <UiInput v-model="assertion.jsonPath" class="flex-1 h-7 text-xs font-mono" placeholder="$.data.id" @update:model-value="debouncedSaveTestConfig(request.id)" />
-                          <select v-model="assertion.operator" class="h-7 text-xs bg-background border border-border rounded px-2" @change="debouncedSaveTestConfig(request.id)">
-                            <option value="equals">equals</option>
-                            <option value="not_equals">not equals</option>
-                            <option value="contains">contains</option>
-                            <option value="exists">exists</option>
-                            <option value="not_exists">not exists</option>
-                          </select>
+                          <UiSelect
+                            :model-value="assertion.operator"
+                            :options="[{ value: 'equals', label: 'equals' }, { value: 'not_equals', label: 'not equals' }, { value: 'contains', label: 'contains' }, { value: 'exists', label: 'exists' }, { value: 'not_exists', label: 'not exists' }]"
+                            class="h-7 text-xs"
+                            @update:model-value="assertion.operator = $event as any; debouncedSaveTestConfig(request.id)"
+                          />
                           <UiInput
                             v-if="assertion.operator !== 'exists' && assertion.operator !== 'not_exists'"
                             v-model="assertion.expectedValue"

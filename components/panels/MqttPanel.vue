@@ -161,15 +161,12 @@ const formatTime = (timestamp: number) => {
               />
               Use TLS
             </label>
-            <select
-              :value="request.qos"
-              class="h-8 rounded border border-input bg-background px-2 text-sm"
-              @change="store.updateActiveRequest({ qos: parseInt(($event.target as HTMLSelectElement).value) as 0 | 1 | 2 })"
-            >
-              <option value="0">QoS 0</option>
-              <option value="1">QoS 1</option>
-              <option value="2">QoS 2</option>
-            </select>
+            <UiSelect
+              :model-value="String(request.qos)"
+              :options="[{ value: '0', label: 'QoS 0' }, { value: '1', label: 'QoS 1' }, { value: '2', label: 'QoS 2' }]"
+              class="h-8 w-24 text-sm"
+              @update:model-value="store.updateActiveRequest({ qos: parseInt($event) as 0 | 1 | 2 })"
+            />
           </div>
           
           <UiButton

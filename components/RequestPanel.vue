@@ -272,18 +272,15 @@ watch(() => activeTab.value.request.bodyType, (newType) => {
   <div class="flex flex-col h-full">
     <!-- URL Bar -->
     <div class="flex items-center gap-3 border-b border-border p-4">
-      <select
-        :value="activeTab.request.method"
+      <UiSelect
+        :model-value="activeTab.request.method"
+        :options="methods"
         :class="[
-          'h-11 rounded-md border border-input bg-background px-3 font-mono text-base font-semibold focus:outline-none focus:ring-2 focus:ring-ring',
+          'h-11 w-auto font-mono text-base font-semibold',
           `method-${activeTab.request.method.toLowerCase()}`
         ]"
-        @change="store.updateActiveRequest({ method: ($event.target as HTMLSelectElement).value as HttpMethod })"
-      >
-        <option v-for="m in methods" :key="m.value" :value="m.value">
-          {{ m.label }}
-        </option>
-      </select>
+        @update:model-value="store.updateActiveRequest({ method: $event as HttpMethod })"
+      />
 
       <UiVariableInput
         :model-value="activeTab.request.url"
@@ -632,14 +629,12 @@ watch(() => activeTab.value.request.bodyType, (newType) => {
               @update:model-value="store.updateFormData(item.id, 'key', $event)"
             />
             <!-- Type selector -->
-            <select
-              :value="item.type"
-              class="h-10 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              @change="store.updateFormData(item.id, 'type', ($event.target as HTMLSelectElement).value)"
-            >
-              <option value="text">Text</option>
-              <option value="file">File</option>
-            </select>
+            <UiSelect
+              :model-value="item.type"
+              :options="[{ value: 'text', label: 'Text' }, { value: 'file', label: 'File' }]"
+              class="h-10 w-24 text-sm"
+              @update:model-value="store.updateFormData(item.id, 'type', $event)"
+            />
             <!-- Text input -->
             <UiVariableInput
               v-if="item.type === 'text'"

@@ -4,6 +4,9 @@
 
 <h1 align="center">Istek</h1>
 
+> ⚠️ **Note:** Istek is currently under active development and in the testing phase. The official release is coming soon.
+
+
 <p align="center">
   <strong>AI-Native API Client for the Modern Developer</strong>
 </p>
@@ -15,7 +18,7 @@
 
 <p align="center">
   <a href="https://istek.app/download">Download</a> •
-  <a href="https://istek.app/docs">Documentation</a> •
+  <a href="https://docs.istek.app">Documentation</a> •
   <a href="https://github.com/istekapp/istek/releases">Releases</a>
 </p>
 

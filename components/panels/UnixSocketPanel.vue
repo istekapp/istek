@@ -72,13 +72,12 @@ const formattedBody = computed(() => {
           />
         </div>
         <div class="flex items-center gap-2">
-          <select
-            :value="request.method"
-            class="h-10 rounded-md border border-input bg-background px-3 font-mono text-sm font-semibold"
-            @change="store.updateActiveRequest({ method: ($event.target as HTMLSelectElement).value as any })"
-          >
-            <option v-for="m in methods" :key="m" :value="m">{{ m }}</option>
-          </select>
+          <UiSelect
+            :model-value="request.method"
+            :options="methods.map(m => ({ value: m, label: m }))"
+            class="h-10 w-auto font-mono text-sm font-semibold"
+            @update:model-value="store.updateActiveRequest({ method: $event as any })"
+          />
           <UiInput
             :model-value="request.path"
             placeholder="/v1.43/containers/json"

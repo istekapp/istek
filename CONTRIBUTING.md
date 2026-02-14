@@ -56,4 +56,4 @@ istek/
 
 ## Questions?
 
-Join the discussion on [GitHub Discussions](https://github.com/istekapp/istek/discussions) or reach out on [Twitter/X](https://x.com/niceydev).
+Join the discussion on [GitHub Discussions](https://github.com/istekapp/istek/discussions) or reach out on [Twitter/X](https://x.com/istek_app).
